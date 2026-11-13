@@ -28,3 +28,6 @@ service/apps/web/playwright-report/
 service/apps/web/blob-report/
 *.tsbuildinfo
 next-env.d.ts
+
+# Redis 로컬 덤프
+dump.rdb

@@ -1,0 +1,21 @@
+# 수집 워커(scrape 큐, 동시성 1). Google Chrome + Xvfb 포함.
+# SCRAPER_HEADLESS=false(TBD-10 기본값)일 때는 가상 화면(Xvfb)에서 브라우저를 띄운다.
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg ca-certificates xvfb xauth fonts-noto-cjk \
+ && wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google.gpg \
+ && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google.list \
+ && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY service/pyproject.toml service/
+COPY service/packages service/packages
+COPY service/apps/api service/apps/api
+COPY service/apps/worker service/apps/worker
+COPY service/apps/detector_server service/apps/detector_server
+RUN pip install "./service[worker,postgres]"
+# 학습용 내보내기(export-training)는 model/data/raw/coupang에 쓴다(볼륨 마운트)
+WORKDIR /app/service
+RUN useradd -m scraper && mkdir -p /app/service/var && chown -R scraper /app/service/var
+USER scraper
+CMD ["sh", "-c", "if [ \"$SCRAPER_HEADLESS\" = \"true\" ]; then exec celery -A realstar_worker.celery_app worker -Q scrape -c 1 --prefetch-multiplier 1 -n scrape@%h; else exec xvfb-run -a -s '-screen 0 1366x900x24' celery -A realstar_worker.celery_app worker -Q scrape -c 1 --prefetch-multiplier 1 -n scrape@%h; fi"]

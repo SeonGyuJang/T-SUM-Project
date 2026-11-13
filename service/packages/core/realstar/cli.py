@@ -196,7 +196,9 @@ def cmd_export_demo(args: argparse.Namespace) -> int:
         ]
         example = {"key": args.key, "is_placeholder": False, "input_examples": {"url": (a.result or {}).get("product", {}).get("url"), "query": args.query},
                    "result": a.result, "replay": log}
-    out = Path(args.out or f"../apps/web/src/demo/data/{args.key}.json")
+    from realstar.config import SERVICE_ROOT
+
+    out = Path(args.out or SERVICE_ROOT / "apps" / "web" / "src" / "demo" / "data" / f"{args.key}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(example, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"demo example written: {out}")

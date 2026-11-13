@@ -1,0 +1,21 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^service/
+  - repo: local
+    hooks:
+      - id: web-lint
+        name: web eslint
+        entry: bash -c 'cd service/apps/web && npx eslint .'
+        language: system
+        files: ^service/apps/web/src/
+        pass_filenames: false
+      - id: web-typecheck
+        name: web tsc
+        entry: bash -c 'cd service/apps/web && npx tsc --noEmit'
+        language: system
+        files: ^service/apps/web/src/
+        pass_filenames: false

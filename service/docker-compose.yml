@@ -1,0 +1,91 @@
+# 리얼별점 서비스 전체 구성 (README 4장, 6장). 실행: docker compose --env-file .env up --build
+# 빌드 컨텍스트는 저장소 루트(..)다: detector·API 이미지에 model/ 패키지를 함께 넣기 위함.
+name: realstar
+
+x-py-env: &py-env
+  DATABASE_URL: postgresql+psycopg://realstar:${POSTGRES_PASSWORD:-realstar}@postgres:5432/realstar
+  REDIS_URL: redis://redis:6379/0
+  TASK_BACKEND: celery
+  DETECTOR_MODE: http
+  DETECTOR_URL: http://detector:8001
+  STATE_DIR: /app/service/var/state
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: realstar
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-realstar}
+      POSTGRES_DB: realstar
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U realstar"], interval: 5s, retries: 20 }
+
+  redis:
+    image: redis:7-alpine
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 20 }
+
+  migrate:
+    build: { context: .., dockerfile: service/docker/python.Dockerfile }
+    env_file: .env
+    environment: *py-env
+    command: alembic upgrade head
+    depends_on: { postgres: { condition: service_healthy } }
+
+  detector:
+    build: { context: .., dockerfile: service/docker/python.Dockerfile }
+    env_file: .env
+    environment:
+      DETECTOR_BACKEND: ${DETECTOR_BACKEND:-realstar_model}
+      MODEL_ARTIFACT_PATH: /models/${MODEL_VERSION:-det-ko-review-v1.0}
+    volumes: ["../model/artifacts:/models:ro"]
+    command: uvicorn --factory realstar_detector_server.main:create_app --host 0.0.0.0 --port 8001
+    ports: ["8001:8001"]
+    # GPU 사용 시 아래 주석을 해제한다(NVIDIA Container Toolkit 필요, TBD-8)
+    # deploy: { resources: { reservations: { devices: [{ capabilities: [gpu] }] } } }
+
+  api:
+    build: { context: .., dockerfile: service/docker/python.Dockerfile }
+    env_file: .env
+    environment: *py-env
+    command: uvicorn --factory realstar_api.main:create_app --host 0.0.0.0 --port 8000 --proxy-headers
+    ports: ["8000:8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker-scrape:
+    build: { context: .., dockerfile: service/docker/scraper.Dockerfile }
+    env_file: .env
+    environment:
+      <<: *py-env
+      TRAINING_EXPORT_DIR: /export/coupang
+    shm_size: 1gb
+    volumes:
+      - scrape-var:/app/service/var
+      - ../model/data/raw/coupang:/export/coupang
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker-detect:
+    build: { context: .., dockerfile: service/docker/python.Dockerfile }
+    env_file: .env
+    environment: *py-env
+    command: celery -A realstar_worker.celery_app worker -Q detect -c 2 -n detect@%h
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  web:
+    build:
+      context: apps/web
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
+        NEXT_PUBLIC_DEMO_MODE: ${DEMO_MODE:-false}
+        NEXT_PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost:3000}
+    ports: ["3000:3000"]
+    depends_on: [api]
+
+volumes:
+  pgdata:
+  scrape-var:

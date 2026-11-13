@@ -14,3 +14,4 @@
 | reviews_empty_synthetic.html | 리뷰 없음 표시 |
 | blocked_access_denied.html | Akamai 계열 Access Denied |
 | blocked_captcha.html | CAPTCHA·챌린지 화면 |
+| blocked_permission_ko.html | **실제 쿠팡 응답**(2026-11-13 오너 PC spike): 자동화 브라우저에 반환된 '사용권한이 없습니다' 페이지. Ref(접속 IP 포함)는 지움 |

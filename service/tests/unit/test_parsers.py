@@ -89,7 +89,14 @@ def test_reviews_empty_marker() -> None:
     assert parse_reviews(html, SEL, "1")[0] == []
 
 
-@pytest.mark.parametrize(("name", "signal"), [("blocked_access_denied.html", "block_title"), ("blocked_captcha.html", "captcha_or_challenge")])
+@pytest.mark.parametrize(
+    ("name", "signal"),
+    [
+        ("blocked_access_denied.html", "block_title"),
+        ("blocked_captcha.html", "captcha_or_challenge"),
+        ("blocked_permission_ko.html", "access_denied"),  # 실제 쿠팡 응답(2026-11-13, Ref 값 제거)
+    ],
+)
 def test_block_pages(name: str, signal: str) -> None:
     with pytest.raises(BlockedError) as e:
         BlockDetector(SEL).check_page(read_html(name))

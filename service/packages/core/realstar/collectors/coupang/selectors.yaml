@@ -89,7 +89,8 @@ product:
 
 reviews:
   section: ['#sdpReview', '.sdp-review', '#btfTab .product-review']
-  list_ready: ['article.sdp-review__article__list', '.sdp-review__article__no-review', '.js_reviewArticleListContainer']
+  # 목록 컨테이너가 아니라 실제 리뷰(또는 '리뷰 없음' 표시)가 나타나야 준비된 것으로 본다
+  list_ready: ['article.sdp-review__article__list', '.sdp-review__article__no-review']
   no_review: ['.sdp-review__article__no-review']
   item: ['article.sdp-review__article__list']
   review_id_attrs: ['data-review-id', 'data-reviewid']

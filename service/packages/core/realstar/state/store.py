@@ -1,27 +1,52 @@
 """프로세스 간 공유 상태: 차단 쿨다운, 일일 페이지 카운터, 전역 스크래핑 락.
 
 - 운영: Redis(분산 락, README 4장)
-- 개발·CLI: 로컬 파일 + fcntl 락 (Redis 없이 동작)
+- 개발·CLI: 로컬 파일 + 파일 락 (Redis 없이 동작, macOS·Linux·Windows)
 """
 
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
+import os
+import sys
 import threading
 import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Protocol
+from typing import IO, Protocol
 from zoneinfo import ZoneInfo
 
 from realstar.config import Settings
 from realstar.errors import CooldownActiveError, ScraperBusyError
 
 KST = ZoneInfo("Asia/Seoul")
+
+if sys.platform == "win32":  # Windows: fcntl이 없어 msvcrt 바이트 락을 쓴다
+    import msvcrt
+
+    def _lock_file(f: IO[str]) -> None:
+        f.seek(0)
+        while True:
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError:  # LK_LOCK은 약 10초 뒤 실패 → 다시 시도
+                continue
+
+    def _unlock_file(f: IO[str]) -> None:
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _lock_file(f: IO[str]) -> None:
+        fcntl.flock(f, fcntl.LOCK_EX)
+
+    def _unlock_file(f: IO[str]) -> None:
+        fcntl.flock(f, fcntl.LOCK_UN)
 COOLDOWN_KEY = "realstar:scrape:cooldown"
 SCRAPE_LOCK_KEY = "realstar:scrape:lock"
 
@@ -52,18 +77,21 @@ class LocalStateStore:
     @contextlib.contextmanager
     def _locked(self) -> Iterator[dict[str, dict[str, float | str | None]]]:
         with self._thread_lock, self._guard.open("a+") as g:
-            fcntl.flock(g, fcntl.LOCK_EX)
+            if g.tell() == 0:
+                g.write("0")  # Windows 바이트 락용 1바이트
+                g.flush()
+            _lock_file(g)
             try:
-                data = json.loads(self.path.read_text()) if self.path.exists() else {}
+                data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
             except json.JSONDecodeError:
                 data = {}
             now = time.time()
             data = {k: v for k, v in data.items() if v.get("exp") is None or float(v["exp"]) > now}  # type: ignore[arg-type]
             yield data
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data))
-            tmp.replace(self.path)
-            fcntl.flock(g, fcntl.LOCK_UN)
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            os.replace(tmp, self.path)
+            _unlock_file(g)
 
     def get(self, key: str) -> str | None:
         with self._locked() as data:

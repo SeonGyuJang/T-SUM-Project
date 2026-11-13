@@ -276,19 +276,46 @@ class ReviewCollector:
             return
         before = self._list_signature()
         if self.b.click_first(self.sel.css_list("reviews", "sort_latest")):
-            self._wait_list_changed(before)
+            self._wait_list_settled(before)
             self.b.after_navigation()
         self._sorted_latest = True
 
     def _list_signature(self) -> str:
         soup = make_soup(self.b.page_source)
         items = select_all(soup, self.sel.css_list("reviews", "item"))
+        if not items and has_no_review_marker(str(soup), self.sel):
+            return "<no-review>"
         return "|".join((text_of(i) or "")[:60] for i in items[:3])
 
-    def _wait_list_changed(self, before: str) -> None:
-        """클릭 후 목록이 실제로 바뀔 때까지 기다린다(이전 목록을 다시 읽는 것 방지)."""
+    def _list_stars(self) -> tuple[list[int | None], bool]:
+        html = self.b.page_source
+        reviews, stats = parse_reviews(html, self.sel, "_", salt="")
+        del stats
+        return [r.star for r in reviews], has_no_review_marker(html, self.sel)
+
+    def _wait_list_settled(self, before: str, star: int | None = None) -> None:
+        """클릭 후 목록이 실제로 바뀌고(이전 목록 재사용 방지), 잠시 그대로 유지될 때까지 기다린다.
+
+        사이트가 목록을 비동기로 다시 그리므로, 바뀐 직후의 중간 상태(예: 이전 클릭의 늦은 결과)를 읽지 않게 한다.
+        star가 주어지면 보이는 리뷰가 모두 그 별점일 때까지 기다린다.
+        """
         self.b.wait_for_any(self.sel.css_list("reviews", "list_ready"))
         self.b.wait_until(lambda: self._list_signature() != before)
+        last: list[str] = []
+        repeats = [0]
+
+        def settled() -> bool:
+            sig = self._list_signature()
+            repeats[0] = repeats[0] + 1 if last and sig == last[-1] else 0
+            last.append(sig)
+            if repeats[0] < 2:
+                return False
+            if star is None:
+                return True
+            stars, empty = self._list_stars()
+            return empty or (bool(stars) and all(x == star for x in stars))
+
+        self.b.wait_until(settled)
 
     def _select_star(self, star: int) -> None:
         before = self._list_signature()
@@ -296,13 +323,13 @@ class ReviewCollector:
         option_css = str(self.sel.get("reviews", "star_filter_option")).format(star=star)
         if not self.b.click_first([option_css]):
             raise ParserBrokenError("reviews", {"reviews.star_filter_option": 1.0}, f"star filter {star} not found")
-        self._wait_list_changed(before)
+        self._wait_list_settled(before, star=star)
 
     def _go_next_page(self, next_page: int) -> bool:
         before = self._list_signature()
         page_css = str(self.sel.get("reviews", "page_button")).format(page=next_page)
         if self.b.click_first([page_css]) or self.b.click_first(self.sel.css_list("reviews", "next_page_group")):
-            self._wait_list_changed(before)
+            self._wait_list_settled(before)
             return True
         return False
 

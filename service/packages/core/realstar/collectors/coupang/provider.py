@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from realstar.collectors.base import ProductMeta, ProgressCallback, RawReview, SearchCandidate, SortOrder
@@ -30,6 +31,7 @@ class CoupangScraperProvider:
         driver_factory: Callable[[Settings], DriverLike] = default_driver_factory,
         browser: BrowserSession | None = None,
         training: bool = False,
+        snapshot_dir: Path | None = None,
     ) -> None:
         self.settings = settings
         self.selectors = selectors or load_selectors()
@@ -42,7 +44,7 @@ class CoupangScraperProvider:
                     "max_pages": 10_000,
                     "budget_scope": "training",
                 }
-            browser = BrowserSession(settings, self.selectors, state, driver_factory=driver_factory, **kwargs)  # type: ignore[arg-type]
+            browser = BrowserSession(settings, self.selectors, state, driver_factory=driver_factory, snapshot_dir=snapshot_dir, **kwargs)  # type: ignore[arg-type]
         self.browser = browser
         self.collector = ReviewCollector(
             self.browser,

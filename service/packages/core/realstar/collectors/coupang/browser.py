@@ -14,6 +14,7 @@ import random
 import re
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Protocol
 
 from realstar.collectors.coupang.block_detector import BlockDetector
@@ -37,6 +38,17 @@ class DriverLike(Protocol):
     def execute_script(self, script: str, *args: Any) -> Any: ...
     def set_page_load_timeout(self, seconds: float) -> None: ...
     def quit(self) -> None: ...
+
+
+def sanitize_html(html: str, selectors: Selectors) -> str:
+    """작성자 닉네임 요소의 글자를 가린다. 그 외 구조는 셀렉터 진단을 위해 그대로 둔다."""
+    from realstar.collectors.coupang.selectors import make_soup
+
+    soup = make_soup(html)
+    for css in selectors.css_list("reviews", "author"):
+        for node in soup.select(css):
+            node.string = "***"
+    return str(soup)
 
 
 def default_driver_factory(settings: Settings) -> DriverLike:
@@ -76,6 +88,7 @@ class BrowserSession:
         max_pages_per_day: int | None = None,
         delay_range: tuple[float, float] | None = None,
         budget_scope: str = "service",
+        snapshot_dir: Path | None = None,
     ) -> None:
         self.settings = settings
         self.selectors = selectors
@@ -94,6 +107,8 @@ class BrowserSession:
         urls = selectors.section("urls")
         self._allowed = [re.compile(p) for p in urls.get("allowed_patterns", [])]
         self.block_detector = BlockDetector(selectors, settings.scraper_empty_streak_limit)
+        self.snapshot_dir = Path(snapshot_dir) if snapshot_dir else None
+        self._snapshots = 0
 
     # ── 드라이버 ──────────────────────────────────────────
     @property
@@ -160,8 +175,22 @@ class BrowserSession:
 
     def after_navigation(self) -> str:
         html = self.driver.page_source
+        self.save_snapshot(html)
         self.block_detector.check_page(html, self.driver.current_url, self.driver.title)
         return html
+
+    def save_snapshot(self, html: str, label: str | None = None) -> Path | None:
+        """진단용 HTML 스냅샷(spike). 리뷰 작성자 닉네임은 가린다(README 0-3)."""
+        if self.snapshot_dir is None:
+            return None
+        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        self._snapshots += 1
+        url = self.driver.current_url or ""
+        kind = label or ("reviews" if "/product/reviews" in url else "search" if "/np/search" in url
+                         else "product" if "/products/" in url else "page")
+        path = self.snapshot_dir / f"{self._snapshots:03d}_{kind}.html"
+        path.write_text(sanitize_html(html, self.selectors), encoding="utf-8")
+        return path
 
     def wait_for_any(self, css_candidates: list[str], timeout: float | None = None) -> bool:
         """명시적 대기(WebDriverWait). 후보 중 하나라도 나타나면 True."""
@@ -175,7 +204,11 @@ class BrowserSession:
                     return True
             if time.monotonic() >= deadline:
                 return False
-            self._sleep(0.3)
+            self._poll_sleep(0.3)
+
+    def _poll_sleep(self, sec: float) -> None:
+        """화면 변화 대기용 짧은 쉼(속도 제한용 human_delay와 별개). 테스트에서 sleeper를 바꿔도 실제로 기다린다."""
+        time.sleep(sec)
 
     def wait_until(self, predicate: Callable[[], bool], timeout: float | None = None) -> bool:
         timeout = timeout if timeout is not None else self.settings.scraper_page_load_timeout_sec
@@ -183,7 +216,7 @@ class BrowserSession:
         while not predicate():
             if time.monotonic() >= deadline:
                 return False
-            self._sleep(0.3)
+            self._poll_sleep(0.3)
         return True
 
     def click_first(self, css_candidates: list[str]) -> bool:

@@ -41,7 +41,7 @@ where = ["packages/core", "apps/api", "apps/worker", "apps/detector_server"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not browser and not live'"
 markers = [
   "live: 실제 쿠팡 사이트에 접속하는 스모크 테스트 (CI에서 실행 금지, 수동 실행)",
   "contract: realstar_model 패키지가 설치된 경우에만 실행되는 계약 테스트",

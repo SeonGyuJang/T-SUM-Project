@@ -29,6 +29,17 @@ service/
 └── tests/                       # unit / integration / contract, fixtures(html·json)
 ```
 
+## 내 PC에서 실제 수집 + 웹페이지 확인
+
+단계별 안내(설치 → 수집 점검 → 웹 실행, macOS·Windows): **[`docs/local-run-guide.md`](../docs/local-run-guide.md)**
+
+```bash
+cd service && cp .env.local.example .env                     # 실제 쿠팡 수집 + 더미 판별기 + 단일 프로세스
+python -m realstar spike --per-star 10 --url "<상품 링크>"     # 수집 점검 (Chrome 창이 뜸)
+uvicorn --factory realstar_api.main:create_app --port 8000    # API
+cd apps/web && npm run dev                                    # 홈페이지 → http://localhost:3000
+```
+
 ## 빠른 시작 1 — 백엔드 없이 홈페이지만 (목업·발표 모드)
 
 ```bash
@@ -93,8 +104,9 @@ uvicorn --factory realstar_api.main:create_app --port 8000
 ## 테스트
 
 ```bash
-cd service && pytest --cov=realstar          # 127개, 실제 쿠팡 접속 없음 (커버리지 88%)
+cd service && pytest --cov=realstar          # 128개, 실제 쿠팡 접속 없음 (커버리지 88%)
 pytest -m contract                            # 모델 계약 테스트 (realstar_model 설치 시)
+pytest -m browser -o addopts=""               # 실제 Chrome으로 수집기 흐름 검증(로컬 모의 사이트, 쿠팡 접속 없음)
 cd apps/web && npm run lint && npm run typecheck && npm run test:e2e   # Playwright 15개
 ```
 - 통계 고정 검증 예제: `tests/unit/test_stats.py` (★4.21 → ★4.080, −0.13, AI 49.9%; 표본 평균 3.00/2.79가 나오면 실패)

@@ -21,7 +21,9 @@ jobs:
       - run: pip install -e ".[api,worker,postgres,dev]"
       - run: ruff check .
       - run: mypy packages apps
-      - run: pytest --cov=realstar --cov-fail-under=80 -m "not live"
+      - run: pytest --cov=realstar --cov-fail-under=80
+      - name: 실제 Chrome으로 수집기 흐름 검증(로컬 모의 사이트, 쿠팡 접속 없음)
+        run: pytest -m browser -o addopts=""
       - name: Alembic 마이그레이션 (PostgreSQL 16)
         env: { DATABASE_URL: "postgresql+psycopg://realstar:realstar@localhost:5432/realstar" }
         run: alembic upgrade head && alembic check

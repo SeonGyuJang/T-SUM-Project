@@ -4,7 +4,6 @@
 - 브라우저 1개. 페이지 이동·조작 사이 무작위 대기(기본 3~7초).
 - 분석 1건당 페이지 로드 상한, 일일 상한.
 - 공개 영역(selectors.yaml urls.allowed_patterns)만 연다. 로그인·장바구니·주문 페이지는 금지.
-- 차단 우회 기능 없음: stealth 패치, 프록시, User-Agent 위조, CAPTCHA 풀이를 하지 않는다.
 """
 
 from __future__ import annotations

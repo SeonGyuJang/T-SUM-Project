@@ -1,9 +1,3 @@
-"""차단 신호 판정 (README 0-3, 5.2).
-
-차단으로 판단하면 BlockedError를 던진다. 호출자는 즉시 수집을 멈추고 쿨다운에 들어간다.
-여기에는 우회 로직이 없다(CAPTCHA 풀이, 재시도 강화 등 금지).
-"""
-
 from __future__ import annotations
 
 import re

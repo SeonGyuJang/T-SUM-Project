@@ -1,0 +1,328 @@
+{
+  "key": "airfryer",
+  "is_placeholder": true,
+  "input_examples": {
+    "url": "https://www.coupang.com/vp/products/1000000003",
+    "query": "에어프라이어 5L"
+  },
+  "result": {
+    "analysis_id": "demo-airfryer",
+    "product": {
+      "product_id": "1000000003",
+      "name": "[예시] 에어프라이어 5L 블랙",
+      "image_url": "/demo/airfryer.svg",
+      "url": "https://www.coupang.com/vp/products/1000000003"
+    },
+    "platform_stats": {
+      "displayed_avg": 4.4,
+      "total_reviews": 4700,
+      "star_counts": {
+        "5": 3120,
+        "4": 980,
+        "3": 310,
+        "2": 120,
+        "1": 170
+      }
+    },
+    "sampling": {
+      "per_star_limit": 100,
+      "sort": "latest",
+      "collected_at": "2026-11-11T23:40:00+00:00",
+      "pages_loaded": 58,
+      "selectors_version": "placeholder",
+      "from_cache": false
+    },
+    "per_star": {
+      "5": {
+        "total": 3120,
+        "collected": 100,
+        "human": 78,
+        "ai": 14,
+        "uncertain": 8,
+        "human_ratio": 0.8478,
+        "ratio_substituted": false
+      },
+      "4": {
+        "total": 980,
+        "collected": 100,
+        "human": 80,
+        "ai": 12,
+        "uncertain": 8,
+        "human_ratio": 0.8696,
+        "ratio_substituted": false
+      },
+      "3": {
+        "total": 310,
+        "collected": 100,
+        "human": 83,
+        "ai": 10,
+        "uncertain": 7,
+        "human_ratio": 0.8925,
+        "ratio_substituted": false
+      },
+      "2": {
+        "total": 120,
+        "collected": 100,
+        "human": 79,
+        "ai": 13,
+        "uncertain": 8,
+        "human_ratio": 0.8587,
+        "ratio_substituted": false
+      },
+      "1": {
+        "total": 170,
+        "collected": 100,
+        "human": 80,
+        "ai": 11,
+        "uncertain": 9,
+        "human_ratio": 0.8791,
+        "ratio_substituted": false
+      }
+    },
+    "ratings": {
+      "avg_all": 4.4383,
+      "avg_human": 4.4257,
+      "diff": -0.0126,
+      "avg_human_ci95": [
+        4.3851,
+        4.4602
+      ],
+      "diff_ci95": [
+        -0.0532,
+        0.0219
+      ],
+      "ai_share": 0.1433,
+      "ai_share_ci95": [
+        0.0946,
+        0.1981
+      ],
+      "corrected": null
+    },
+    "top_human_reviews": {
+      "5": [
+        {
+          "review_id": "demo_airfryer_5_0",
+          "title": null,
+          "text": "냉동 감자튀김 12분이면 바삭하게 돼요. 바스켓 코팅이 아직 멀쩡하고 설거지도 편해요.",
+          "p_human": 0.97,
+          "created_at": "2026-11-05",
+          "has_photo": true,
+          "len_chars": 48,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_airfryer_5_1",
+          "title": null,
+          "text": "5L라 통닭 반 마리 정도는 충분히 들어가요. 처음에 플라스틱 냄새 조금 났는데 공회전 두 번 하니 없어졌어요.",
+          "p_human": 0.939,
+          "created_at": "2026-10-29",
+          "has_photo": false,
+          "len_chars": 62,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_airfryer_5_2",
+          "title": null,
+          "text": "다이얼 방식이라 어르신들도 쓰기 쉬워요. 소리는 선풍기 정도예요.",
+          "p_human": 0.908,
+          "created_at": "2026-10-12",
+          "has_photo": false,
+          "len_chars": 36,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_airfryer_5_3",
+          "title": "만족",
+          "text": "고구마 구워 먹으려고 샀는데 오븐보다 빨라요. 겉은 쫀득하고 속은 촉촉해요 ㅎㅎ",
+          "p_human": 0.877,
+          "created_at": "2026-10-02",
+          "has_photo": true,
+          "len_chars": 47,
+          "reason_tags": []
+        }
+      ],
+      "4": [
+        {
+          "review_id": "demo_airfryer_4_0",
+          "title": null,
+          "text": "크기는 좋은데 생각보다 자리를 많이 차지해요. 주방이 좁으면 사이즈 꼭 재보세요.",
+          "p_human": 0.966,
+          "created_at": "2026-10-27",
+          "has_photo": false,
+          "len_chars": 45,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_airfryer_4_1",
+          "title": null,
+          "text": "타이머가 30분까지라 긴 요리는 두 번 돌려야 해요. 그 외엔 만족해요.",
+          "p_human": 0.935,
+          "created_at": "2026-10-08",
+          "has_photo": false,
+          "len_chars": 40,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_airfryer_4_2",
+          "title": null,
+          "text": "바스켓 손잡이가 조금 흔들려요. 기능은 문제없어요.",
+          "p_human": 0.904,
+          "created_at": "2026-09-25",
+          "has_photo": false,
+          "len_chars": 28,
+          "reason_tags": []
+        }
+      ],
+      "3": [
+        {
+          "review_id": "demo_airfryer_3_0",
+          "title": null,
+          "text": "열이 위쪽만 세서 중간에 한 번 뒤집어 줘야 골고루 익어요. 가격 생각하면 보통이에요.",
+          "p_human": 0.962,
+          "created_at": "2026-10-18",
+          "has_photo": false,
+          "len_chars": 48,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_airfryer_3_1",
+          "title": null,
+          "text": "작동 중에 겉면이 꽤 뜨거워요. 아이 있는 집은 조심해야 할 것 같아요.",
+          "p_human": 0.931,
+          "created_at": "2026-10-04",
+          "has_photo": false,
+          "len_chars": 40,
+          "reason_tags": []
+        }
+      ],
+      "2": [
+        {
+          "review_id": "demo_airfryer_2_0",
+          "title": null,
+          "text": "두 달 쓰니 코팅이 벗겨지기 시작했어요. 실리콘 집게만 썼는데도요.",
+          "p_human": 0.958,
+          "created_at": "2026-10-22",
+          "has_photo": true,
+          "len_chars": 37,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_airfryer_2_1",
+          "title": null,
+          "text": "온도 조절이 정확하지 않은 것 같아요. 160도로 해도 겉이 타요.",
+          "p_human": 0.927,
+          "created_at": "2026-09-29",
+          "has_photo": false,
+          "len_chars": 37,
+          "reason_tags": []
+        }
+      ],
+      "1": [
+        {
+          "review_id": "demo_airfryer_1_0",
+          "title": null,
+          "text": "한 달 만에 팬 소리가 덜덜거리더니 멈췄어요. AS는 택배 보내야 해서 2주 걸린대요.",
+          "p_human": 0.954,
+          "created_at": "2026-10-15",
+          "has_photo": false,
+          "len_chars": 48,
+          "reason_tags": []
+        }
+      ]
+    },
+    "flags": {
+      "sponsored_count": 0,
+      "cash_event_count": 0,
+      "near_duplicate_groups": 0
+    },
+    "warnings": [
+      {
+        "code": "placeholder",
+        "level": "warning",
+        "message": "가상의 예시 데이터예요. 실제 상품 분석 결과가 아니에요."
+      },
+      {
+        "code": "top_insufficient",
+        "level": "info",
+        "star": 5,
+        "message": "5점에서 조건에 맞는 사람 리뷰가 4개뿐이에요."
+      },
+      {
+        "code": "top_insufficient",
+        "level": "info",
+        "star": 4,
+        "message": "4점에서 조건에 맞는 사람 리뷰가 3개뿐이에요."
+      },
+      {
+        "code": "top_insufficient",
+        "level": "info",
+        "star": 3,
+        "message": "3점에서 조건에 맞는 사람 리뷰가 2개뿐이에요."
+      },
+      {
+        "code": "top_insufficient",
+        "level": "info",
+        "star": 2,
+        "message": "2점에서 조건에 맞는 사람 리뷰가 2개뿐이에요."
+      },
+      {
+        "code": "top_insufficient",
+        "level": "info",
+        "star": 1,
+        "message": "1점에서 조건에 맞는 사람 리뷰가 1개뿐이에요."
+      }
+    ],
+    "model": {
+      "version": "placeholder-example",
+      "T_AI": null,
+      "T_HUMAN": null,
+      "thresholds": null,
+      "is_dummy": false
+    },
+    "assumptions": [
+      "판단 보류 리뷰는 판정된 리뷰와 사람 비율이 같다고 가정하고 계산에서 제외했어요.",
+      "사람 리뷰 기준 별점은 별점별 표본에서 추정한 사람 비율을 상품 전체 별점 분포에 반영해 계산했어요."
+    ]
+  },
+  "replay": [
+    {
+      "stage": "resolve"
+    },
+    {
+      "stage": "collect",
+      "star": 5,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "collect",
+      "star": 4,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "collect",
+      "star": 3,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "collect",
+      "star": 2,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "collect",
+      "star": 1,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "detect"
+    },
+    {
+      "stage": "aggregate"
+    }
+  ]
+}

@@ -1,0 +1,362 @@
+{
+  "key": "vacuum",
+  "is_placeholder": true,
+  "input_examples": {
+    "url": "https://www.coupang.com/vp/products/1000000001",
+    "query": "무선 청소기 A100"
+  },
+  "result": {
+    "analysis_id": "demo-vacuum",
+    "product": {
+      "product_id": "1000000001",
+      "name": "[예시] 무선 청소기 A100 화이트",
+      "image_url": "/demo/vacuum.svg",
+      "url": "https://www.coupang.com/vp/products/1000000001"
+    },
+    "platform_stats": {
+      "displayed_avg": 4.2,
+      "total_reviews": 2000,
+      "star_counts": {
+        "5": 1200,
+        "4": 400,
+        "3": 160,
+        "2": 100,
+        "1": 140
+      }
+    },
+    "sampling": {
+      "per_star_limit": 100,
+      "sort": "latest",
+      "collected_at": "2026-11-12T05:20:00+00:00",
+      "pages_loaded": 52,
+      "selectors_version": "placeholder",
+      "from_cache": false
+    },
+    "per_star": {
+      "5": {
+        "total": 1200,
+        "collected": 100,
+        "human": 50,
+        "ai": 50,
+        "uncertain": 0,
+        "human_ratio": 0.5,
+        "ratio_substituted": false
+      },
+      "4": {
+        "total": 400,
+        "collected": 100,
+        "human": 30,
+        "ai": 70,
+        "uncertain": 0,
+        "human_ratio": 0.3,
+        "ratio_substituted": false
+      },
+      "3": {
+        "total": 160,
+        "collected": 100,
+        "human": 80,
+        "ai": 20,
+        "uncertain": 0,
+        "human_ratio": 0.8,
+        "ratio_substituted": false
+      },
+      "2": {
+        "total": 100,
+        "collected": 100,
+        "human": 70,
+        "ai": 30,
+        "uncertain": 0,
+        "human_ratio": 0.7,
+        "ratio_substituted": false
+      },
+      "1": {
+        "total": 140,
+        "collected": 100,
+        "human": 60,
+        "ai": 40,
+        "uncertain": 0,
+        "human_ratio": 0.6,
+        "ratio_substituted": false
+      }
+    },
+    "ratings": {
+      "avg_all": 4.21,
+      "avg_human": 4.0798,
+      "diff": -0.1302,
+      "avg_human_ci95": [
+        3.9333,
+        4.1815
+      ],
+      "diff_ci95": [
+        -0.2767,
+        -0.0285
+      ],
+      "ai_share": 0.499,
+      "ai_share_ci95": [
+        0.4352,
+        0.5645
+      ],
+      "corrected": null
+    },
+    "top_human_reviews": {
+      "5": [
+        {
+          "review_id": "demo_vacuum_5_0",
+          "title": "한 달 써보고 남겨요",
+          "text": "처음엔 무게 때문에 고민했는데 손목에 무리가 별로 없어요. 강모드는 배터리가 금방 닳아서 평소엔 중간으로 써요. 머리카락 엉킴은 가끔 손으로 빼줘야 해요.",
+          "p_human": 0.97,
+          "created_at": "2026-10-28",
+          "has_photo": true,
+          "len_chars": 98,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_5_1",
+          "title": null,
+          "text": "원룸이라 큰 청소기는 부담이었는데 딱 좋네요 ㅎㅎ 충전 거치대가 조금 흔들리는 거 빼면 만족이에요. 먼지통 비울 때 먼지가 좀 날리긴 해요.",
+          "p_human": 0.939,
+          "created_at": "2026-11-02",
+          "has_photo": false,
+          "len_chars": 78,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_5_2",
+          "title": null,
+          "text": "부모님 댁에 하나 놔드렸어요. 버튼이 하나라 어머니도 바로 쓰시네요. 소리가 예전 유선 청소기보다 훨씬 작다고 좋아하세요.",
+          "p_human": 0.908,
+          "created_at": "2026-10-15",
+          "has_photo": true,
+          "len_chars": 68,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_5_3",
+          "title": "재구매",
+          "text": "두 번째 구매예요. 첫 번째 거 3년 쓰다가 배터리가 약해져서 같은 걸로 다시 샀어요. 필터 물세척 되는 게 제일 편해요.",
+          "p_human": 0.877,
+          "created_at": "2026-09-30",
+          "has_photo": false,
+          "len_chars": 72,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_5_4",
+          "title": null,
+          "text": "고양이 털 때문에 샀는데 카펫에서도 잘 빨아들여요. 다만 헤드에 털이 감겨서 주 1회는 가위로 잘라줘야 돼요ㅠ",
+          "p_human": 0.846,
+          "created_at": "2026-09-21",
+          "has_photo": true,
+          "len_chars": 61,
+          "reason_tags": []
+        }
+      ],
+      "4": [
+        {
+          "review_id": "demo_vacuum_4_0",
+          "title": null,
+          "text": "흡입력은 만족하는데 배터리가 생각보다 짧아요. 30평 집 한 번 돌리면 거의 다 써요. 그래도 가격 생각하면 괜찮아요.",
+          "p_human": 0.966,
+          "created_at": "2026-10-30",
+          "has_photo": false,
+          "len_chars": 66,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_4_1",
+          "title": null,
+          "text": "가볍고 좋은데 거치대 고정이 약해서 벽에 박는 게 나을 것 같아요. 저는 그냥 세워 두고 써요.",
+          "p_human": 0.935,
+          "created_at": "2026-10-11",
+          "has_photo": false,
+          "len_chars": 53,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_4_2",
+          "title": "무난해요",
+          "text": "배송은 이틀 걸렸고 포장 깔끔했어요. 소음은 밤에 쓰기엔 조금 있는 편이에요.",
+          "p_human": 0.904,
+          "created_at": "2026-09-18",
+          "has_photo": true,
+          "len_chars": 48,
+          "reason_tags": []
+        }
+      ],
+      "3": [
+        {
+          "review_id": "demo_vacuum_3_0",
+          "title": null,
+          "text": "기대만큼은 아니에요. 바닥 먼지는 잘 되는데 구석은 솔 툴 끼워야 하고 그게 좀 번거로워요. 가격만큼은 하는 듯.",
+          "p_human": 0.962,
+          "created_at": "2026-10-21",
+          "has_photo": false,
+          "len_chars": 63,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_3_1",
+          "title": null,
+          "text": "충전 시간이 4시간 넘게 걸려서 급할 때 못 써요. 흡입력은 보통이고 디자인은 예뻐요.",
+          "p_human": 0.931,
+          "created_at": "2026-10-03",
+          "has_photo": false,
+          "len_chars": 48,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_3_2",
+          "title": null,
+          "text": "먼지통이 작아서 자주 비워야 해요. 원룸엔 괜찮은데 넓은 집엔 비추예요.",
+          "p_human": 0.9,
+          "created_at": "2026-09-12",
+          "has_photo": false,
+          "len_chars": 40,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_3_3",
+          "title": null,
+          "text": "소음이 생각보다 커요. 아파트라 저녁엔 눈치 보여서 낮에만 돌려요. 그 외엔 그럭저럭.",
+          "p_human": 0.869,
+          "created_at": "2026-08-29",
+          "has_photo": false,
+          "len_chars": 48,
+          "reason_tags": []
+        }
+      ],
+      "2": [
+        {
+          "review_id": "demo_vacuum_2_0",
+          "title": null,
+          "text": "3주 만에 강모드가 안 켜져요. AS 접수했는데 일주일째 연락이 없네요. 제품 자체는 가볍고 좋았어요.",
+          "p_human": 0.958,
+          "created_at": "2026-10-25",
+          "has_photo": false,
+          "len_chars": 57,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_2_1",
+          "title": null,
+          "text": "헤드 바퀴가 금방 뻑뻑해져서 밀 때 힘이 들어가요. 청소할 때마다 스트레스예요.",
+          "p_human": 0.927,
+          "created_at": "2026-10-01",
+          "has_photo": true,
+          "len_chars": 44,
+          "reason_tags": []
+        }
+      ],
+      "1": [
+        {
+          "review_id": "demo_vacuum_1_0",
+          "title": null,
+          "text": "받자마자 충전이 안 돼서 교환했는데 교환품도 똑같아요. 결국 환불했어요. 판매자 응대는 빨랐어요.",
+          "p_human": 0.954,
+          "created_at": "2026-10-19",
+          "has_photo": false,
+          "len_chars": 54,
+          "reason_tags": []
+        },
+        {
+          "review_id": "demo_vacuum_1_1",
+          "title": null,
+          "text": "배터리 표시등이 계속 깜빡이고 2분 쓰면 꺼져요. 불량 같은데 교환 절차가 너무 복잡하네요.",
+          "p_human": 0.923,
+          "created_at": "2026-09-27",
+          "has_photo": false,
+          "len_chars": 51,
+          "reason_tags": []
+        }
+      ]
+    },
+    "flags": {
+      "sponsored_count": 0,
+      "cash_event_count": 0,
+      "near_duplicate_groups": 0
+    },
+    "warnings": [
+      {
+        "code": "placeholder",
+        "level": "warning",
+        "message": "가상의 예시 데이터예요. 실제 상품 분석 결과가 아니에요."
+      },
+      {
+        "code": "top_insufficient",
+        "level": "info",
+        "star": 4,
+        "message": "4점에서 조건에 맞는 사람 리뷰가 3개뿐이에요."
+      },
+      {
+        "code": "top_insufficient",
+        "level": "info",
+        "star": 3,
+        "message": "3점에서 조건에 맞는 사람 리뷰가 4개뿐이에요."
+      },
+      {
+        "code": "top_insufficient",
+        "level": "info",
+        "star": 2,
+        "message": "2점에서 조건에 맞는 사람 리뷰가 2개뿐이에요."
+      },
+      {
+        "code": "top_insufficient",
+        "level": "info",
+        "star": 1,
+        "message": "1점에서 조건에 맞는 사람 리뷰가 2개뿐이에요."
+      }
+    ],
+    "model": {
+      "version": "placeholder-example",
+      "T_AI": null,
+      "T_HUMAN": null,
+      "thresholds": null,
+      "is_dummy": false
+    },
+    "assumptions": [
+      "판단 보류 리뷰는 판정된 리뷰와 사람 비율이 같다고 가정하고 계산에서 제외했어요.",
+      "사람 리뷰 기준 별점은 별점별 표본에서 추정한 사람 비율을 상품 전체 별점 분포에 반영해 계산했어요."
+    ]
+  },
+  "replay": [
+    {
+      "stage": "resolve"
+    },
+    {
+      "stage": "collect",
+      "star": 5,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "collect",
+      "star": 4,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "collect",
+      "star": 3,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "collect",
+      "star": 2,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "collect",
+      "star": 1,
+      "collected": 100,
+      "target": 100
+    },
+    {
+      "stage": "detect"
+    },
+    {
+      "stage": "aggregate"
+    }
+  ]
+}

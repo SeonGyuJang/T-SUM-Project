@@ -21,6 +21,7 @@ model/artifacts/
 # Web
 node_modules/
 .next/
+.next-*/
 out/
 service/apps/web/test-results/
 service/apps/web/playwright-report/

@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * 디자인 토큰 (README 14.5). 값은 RGB 채널로 두고 tailwind.config.ts에서 rgb(var(--x) / α)로 쓴다.
+ * TODO(owner): Q2 브랜드 색상 답변 후 --primary 계열만 바꾸면 전체에 반영된다. (현재: 남색 계열 기본값)
+ * 사람(human)과 AI 추정(ai)은 청록/주황 조합(색약 구분 가능)이며, 차트에서는 패턴·라벨을 함께 쓴다.
+ * 다크 모드는 Q9 기본값(라이트만)에 따라 만들지 않았다.
+ */
+:root {
+  --bg: 255 255 255;
+  --bg-subtle: 247 248 250;
+  --surface: 255 255 255;
+  --border: 229 231 235;
+  --border-strong: 203 208 216;
+  --text: 17 24 39;
+  --text-muted: 75 85 99;
+  --shadow: 17 24 39;
+
+  --primary: 30 58 138;
+  --primary-hover: 30 64 175;
+  --primary-fg: 255 255 255;
+  --primary-soft: 238 242 255;
+
+  --human: 14 116 144;
+  --human-soft: 224 242 247;
+  --ai: 173 52 8;
+  --ai-soft: 255 237 213;
+  --uncertain: 107 114 128;
+  --uncertain-soft: 243 244 246;
+
+  --warning: 133 77 14;
+  --warning-soft: 254 243 199;
+  --danger: 185 28 28;
+  --danger-soft: 254 226 226;
+  --success: 21 128 61;
+  --success-soft: 220 252 231;
+  --star: 180 83 9;
+
+  color-scheme: light;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-bg font-sans text-body text-text antialiased;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
+  :focus-visible {
+    @apply rounded-sm outline outline-2 outline-offset-2 outline-primary;
+  }
+  ::selection {
+    @apply bg-primary-soft;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .container-page {
+    @apply mx-auto w-full max-w-content px-4 sm:px-6 lg:px-8;
+  }
+  .section {
+    @apply py-16 md:py-24;
+  }
+  .prose-ko h2 {
+    @apply mb-4 mt-12 text-h2;
+  }
+  .prose-ko h3 {
+    @apply mb-2 mt-8 text-h3;
+  }
+  .prose-ko p,
+  .prose-ko li {
+    @apply text-body text-muted;
+  }
+  .prose-ko p {
+    @apply mb-4;
+  }
+  .prose-ko ul {
+    @apply mb-4 list-disc space-y-1 pl-6;
+  }
+  .prose-ko ol {
+    @apply mb-4 list-decimal space-y-1 pl-6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  header,
+  footer,
+  .no-print {
+    display: none !important;
+  }
+  body {
+    @apply bg-white;
+  }
+  .print-break {
+    break-inside: avoid;
+  }
+}

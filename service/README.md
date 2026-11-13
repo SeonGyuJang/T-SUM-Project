@@ -39,6 +39,7 @@ python -m realstar spike --per-star 10 --url "<상품 링크>"     # 수집 점�
 uvicorn --factory realstar_api.main:create_app --port 8000    # API
 cd apps/web && npm run dev                                    # 홈페이지 → http://localhost:3000
 ```
+Chrome의 실제 User-Agent를 기본 사용하고, `Accept-Language: ko-KR,ko;q=0.9`를 기본 요청 헤더로 지정한다. `.env`의 `SCRAPER_USER_AGENT` 및 JSON 객체 형식의 `SCRAPER_CUSTOM_HEADERS`로 필요에 따라 조정할 수 있다. 이 설정은 사이트의 접근 정책이나 차단을 우회하지 않는다.
 
 ## 빠른 시작 1 — 백엔드 없이 홈페이지만 (목업·발표 모드)
 

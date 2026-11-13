@@ -51,11 +51,13 @@ def sanitize_html(html: str, selectors: Selectors) -> str:
 
 
 def default_driver_factory(settings: Settings) -> DriverLike:
-    """Selenium 4 + Selenium Manager로 Chrome을 띄운다. 기본 프로필, 기본 User-Agent 그대로."""
+    """Selenium 4 + Selenium Manager로 Chrome을 띄우고 선택적 요청 헤더를 적용한다."""
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
 
     options = webdriver.ChromeOptions()
+    if settings.scraper_user_agent:
+        options.add_argument(f"--user-agent={settings.scraper_user_agent}")
     if settings.scraper_headless:
         options.add_argument("--headless=new")
     options.add_argument("--window-size=1366,900")
@@ -68,6 +70,12 @@ def default_driver_factory(settings: Settings) -> DriverLike:
     service = Service(executable_path=settings.scraper_chromedriver_path) if settings.scraper_chromedriver_path else Service()
     driver = webdriver.Chrome(options=options, service=service)
     driver.set_page_load_timeout(settings.scraper_page_load_timeout_sec)
+    if settings.scraper_custom_headers:
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd(
+            "Network.setExtraHTTPHeaders",
+            {"headers": settings.scraper_custom_headers},
+        )
     return driver  # type: ignore[return-value]
 
 

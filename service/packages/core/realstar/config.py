@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     scraper_debug_html_keep: int = 20
     scraper_chrome_binary: str | None = None  # 비워 두면 Selenium Manager가 찾는다
     scraper_chromedriver_path: str | None = None
+    scraper_user_agent: str | None = None
+    scraper_custom_headers: dict[str, str] = Field(
+        default_factory=lambda: {"Accept-Language": "ko-KR,ko;q=0.9"}
+    )
     # 컨테이너(Docker·Heroku)에서 Chrome을 띄울 때 필요한 표준 옵션(--no-sandbox, --disable-dev-shm-usage).
     # 차단 우회와 무관한 실행 환경 옵션이다.
     scraper_chrome_container: bool = False
@@ -98,6 +102,18 @@ class Settings(BaseSettings):
             if v.startswith(prefix):
                 return "postgresql+psycopg://" + v[len(prefix):]
         return v
+
+    @field_validator("scraper_custom_headers")
+    @classmethod
+    def _validate_scraper_custom_headers(cls, headers: dict[str, str]) -> dict[str, str]:
+        for name, value in headers.items():
+            if not name or any(char in name for char in "\r\n:"):
+                raise ValueError(f"invalid custom header name: {name!r}")
+            if "\r" in value or "\n" in value:
+                raise ValueError(f"invalid value for custom header {name!r}")
+            if name.lower() == "user-agent":
+                raise ValueError("configure User-Agent with SCRAPER_USER_AGENT")
+        return headers
 
     @property
     def redis_ssl_kwargs(self) -> dict[str, object]:

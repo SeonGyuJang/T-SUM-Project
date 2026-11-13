@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+
+# 서비스 런타임 데이터 (DB, 상태, 디버그 HTML, 로그, spike 리포트)
+service/var/
+.env
+
+# 모델 (MODEL_DEV.md 9장)
+model/data/
+model/artifacts/
+
+# Web
+node_modules/
+.next/
+out/
+service/apps/web/test-results/
+service/apps/web/playwright-report/
+service/apps/web/blob-report/
+*.tsbuildinfo
+next-env.d.ts

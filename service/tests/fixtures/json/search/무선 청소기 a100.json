@@ -1,0 +1,40 @@
+{
+ "candidates": [
+  {
+   "product_id": "1000000001",
+   "item_id": null,
+   "vendor_item_id": null,
+   "name": "[예시] 무선 청소기 A100 화이트",
+   "price": 189000,
+   "image_url": null,
+   "url": "https://www.coupang.com/vp/products/1000000001",
+   "is_ad": false,
+   "rating": 4.5,
+   "review_count": 2000
+  },
+  {
+   "product_id": "1000000011",
+   "item_id": null,
+   "vendor_item_id": null,
+   "name": "[예시] 무선 청소기 A200 그레이",
+   "price": 239000,
+   "image_url": null,
+   "url": "https://www.coupang.com/vp/products/1000000011",
+   "is_ad": false,
+   "rating": 4.5,
+   "review_count": 812
+  },
+  {
+   "product_id": "1000000012",
+   "item_id": null,
+   "vendor_item_id": null,
+   "name": "[예시] 핸디 청소기 미니",
+   "price": 49000,
+   "image_url": null,
+   "url": "https://www.coupang.com/vp/products/1000000012",
+   "is_ad": true,
+   "rating": 4.5,
+   "review_count": 95
+  }
+ ]
+}

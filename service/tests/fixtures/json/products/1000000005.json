@@ -1,0 +1,251 @@
+{
+ "meta": {
+  "product_id": "1000000005",
+  "name": "[예시] 전기포트 1.7L",
+  "image_url": null,
+  "url": "https://www.coupang.com/vp/products/1000000005",
+  "category": "생활가전",
+  "displayed_avg": 4.1,
+  "total_reviews": 19,
+  "star_counts": {
+   "5": 10,
+   "4": 5,
+   "3": 2,
+   "2": 1,
+   "1": 1
+  }
+ },
+ "reviews": [
+  {
+   "review_id": "r1000000005_5_000",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": "좋아요",
+   "content": "배송 빠르고 포장도 꼼꼼했어요. 소음이 생각보다 작아서 밤에도 쓸 수 있어요. 충전이 빨라서 편해요.",
+   "created_at": "2026-01-01",
+   "has_photo": true,
+   "helpful_count": 0,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_5_001",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": null,
+   "content": "이 가격에 이 정도면 대만족입니다. 소음이 생각보다 작아서 밤에도 쓸 수 있어요. 추천합니다",
+   "created_at": "2026-02-04",
+   "has_photo": false,
+   "helpful_count": 13,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_5_002",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": null,
+   "content": "두 번째 구매예요. 소음이 생각보다 작아서 밤에도 쓸 수 있어요. ㅎㅎ",
+   "created_at": "2026-03-07",
+   "has_photo": false,
+   "helpful_count": 9,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_5_003",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": null,
+   "content": "부모님 선물로 샀는데 좋아하세요. 소음이 생각보다 작아서 밤에도 쓸 수 있어요. 소음이 생각보다 작아서 밤에도 쓸 수 있어요. 별로예요",
+   "created_at": "2026-04-10",
+   "has_photo": false,
+   "helpful_count": 5,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_5_004",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": "좋아요",
+   "content": "고민하다 샀는데 잘 샀네요. 소음이 생각보다 작아서 밤에도 쓸 수 있어요. 그래도 쓸만해요",
+   "created_at": "2026-05-13",
+   "has_photo": false,
+   "helpful_count": 1,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_5_005",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": null,
+   "content": "배송 빠르고 포장도 꼼꼼했어요. 무게가 가벼워서 손목이 덜 아파요. 다음에도 여기서 살게요",
+   "created_at": "2026-06-16",
+   "has_photo": false,
+   "helpful_count": 14,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_5_006",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": null,
+   "content": "이 가격에 이 정도면 대만족입니다. 무게가 가벼워서 손목이 덜 아파요. 디자인이 깔끔해서 거실에 둬도 예뻐요. ㅠㅠ",
+   "created_at": "2026-07-19",
+   "has_photo": true,
+   "helpful_count": 10,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_5_007",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": null,
+   "content": "두 번째 구매예요. 무게가 가벼워서 손목이 덜 아파요. 참고하세요",
+   "created_at": "2026-08-22",
+   "has_photo": false,
+   "helpful_count": 6,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_5_008",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": "좋아요",
+   "content": "부모님 선물로 샀는데 좋아하세요. 무게가 가벼워서 손목이 덜 아파요. 고민되시면 사세요",
+   "created_at": "2026-09-25",
+   "has_photo": false,
+   "helpful_count": 2,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_5_009",
+   "product_id": "1000000005",
+   "star": 5,
+   "title": null,
+   "content": "고민하다 샀는데 잘 샀네요. 무게가 가벼워서 손목이 덜 아파요. 무게가 가벼워서 손목이 덜 아파요.",
+   "created_at": "2026-10-28",
+   "has_photo": false,
+   "helpful_count": 15,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_4_000",
+   "product_id": "1000000005",
+   "star": 4,
+   "title": "좋아요",
+   "content": "전체적으로 괜찮아요. 다만 충전 거치대가 조금 흔들려요. 설명서가 좀 부실하긴 해요. 다음에도 여기서 살게요",
+   "created_at": "2026-01-01",
+   "has_photo": true,
+   "helpful_count": 0,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_4_001",
+   "product_id": "1000000005",
+   "star": 4,
+   "title": null,
+   "content": "가격 생각하면 만족해요. 다만 충전 거치대가 조금 흔들려요. ㅠㅠ",
+   "created_at": "2026-02-04",
+   "has_photo": false,
+   "helpful_count": 13,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_4_002",
+   "product_id": "1000000005",
+   "star": 4,
+   "title": null,
+   "content": "기대했던 것과 거의 비슷해요. 다만 충전 거치대가 조금 흔들려요. 참고하세요",
+   "created_at": "2026-03-07",
+   "has_photo": false,
+   "helpful_count": 9,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_4_003",
+   "product_id": "1000000005",
+   "star": 4,
+   "title": null,
+   "content": "쓸만합니다. 다만 충전 거치대가 조금 흔들려요. 다만 충전 거치대가 조금 흔들려요. 고민되시면 사세요",
+   "created_at": "2026-04-10",
+   "has_photo": false,
+   "helpful_count": 5,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_4_004",
+   "product_id": "1000000005",
+   "star": 4,
+   "title": "좋아요",
+   "content": "무난하게 잘 쓰고 있어요. 다만 충전 거치대가 조금 흔들려요.",
+   "created_at": "2026-05-13",
+   "has_photo": false,
+   "helpful_count": 1,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_3_000",
+   "product_id": "1000000005",
+   "star": 3,
+   "title": "좋아요",
+   "content": "그냥 그래요. 흡입력은 보통 수준이에요. 부품 마감이 아쉬워요. 추천합니다",
+   "created_at": "2026-01-01",
+   "has_photo": true,
+   "helpful_count": 0,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_3_001",
+   "product_id": "1000000005",
+   "star": 3,
+   "title": null,
+   "content": "가격만큼 하는 것 같아요. 흡입력은 보통 수준이에요. ㅎㅎ",
+   "created_at": "2026-02-04",
+   "has_photo": false,
+   "helpful_count": 13,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_2_000",
+   "product_id": "1000000005",
+   "star": 2,
+   "title": "좋아요",
+   "content": "조금 실망했어요. 배터리가 금방 닳아요. 사용한 지 얼마 안 됐는데 소리가 커졌어요. ㅠㅠ",
+   "created_at": "2026-01-01",
+   "has_photo": true,
+   "helpful_count": 0,
+   "option_name": "기본형",
+   "author_hash": null
+  },
+  {
+   "review_id": "r1000000005_1_000",
+   "product_id": "1000000005",
+   "star": 1,
+   "title": "좋아요",
+   "content": "완전 실망입니다. 전원이 아예 안 들어와요. 교환받은 것도 똑같이 불량이에요. ㅎㅎ",
+   "created_at": "2026-01-01",
+   "has_photo": true,
+   "helpful_count": 0,
+   "option_name": "기본형",
+   "author_hash": null
+  }
+ ],
+ "simulate": {
+  "parser_broken": true
+ }
+}

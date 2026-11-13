@@ -68,7 +68,13 @@ class PaddleOcrEngine:
     def read(self, image: Image.Image) -> list[OcrLine]:
         import numpy as np
 
-        result = self._ocr.ocr(np.asarray(image.convert("RGB")), cls=True)
+        from realstar.errors import VisionUnavailableError
+
+        try:
+            result = self._ocr.ocr(np.asarray(image.convert("RGB")), cls=True)
+        except Exception as e:  # 엔진 내부 오류는 사용자에게 '이미지 인식 불가'로 안내
+            log.exception("paddleocr failed")
+            raise VisionUnavailableError(f"paddleocr error: {type(e).__name__}") from e
         lines: list[OcrLine] = []
         for page in result or []:
             for quad, (text, conf) in page or []:

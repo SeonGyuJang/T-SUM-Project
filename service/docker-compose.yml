@@ -25,14 +25,14 @@ services:
     healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 20 }
 
   migrate:
-    build: { context: .., dockerfile: service/docker/python.Dockerfile }
+    build: { context: .., dockerfile: Dockerfile.backend }
     env_file: .env
     environment: *py-env
     command: alembic upgrade head
     depends_on: { postgres: { condition: service_healthy } }
 
   detector:
-    build: { context: .., dockerfile: service/docker/python.Dockerfile }
+    build: { context: .., dockerfile: Dockerfile.backend }
     env_file: .env
     environment:
       DETECTOR_BACKEND: ${DETECTOR_BACKEND:-realstar_model}
@@ -44,7 +44,7 @@ services:
     # deploy: { resources: { reservations: { devices: [{ capabilities: [gpu] }] } } }
 
   api:
-    build: { context: .., dockerfile: service/docker/python.Dockerfile }
+    build: { context: .., dockerfile: Dockerfile.backend }
     env_file: .env
     environment: *py-env
     command: uvicorn --factory realstar_api.main:create_app --host 0.0.0.0 --port 8000 --proxy-headers
@@ -54,11 +54,12 @@ services:
       redis: { condition: service_healthy }
 
   worker-scrape:
-    build: { context: .., dockerfile: service/docker/scraper.Dockerfile }
+    build: { context: .., dockerfile: Dockerfile.scraper }
     env_file: .env
     environment:
       <<: *py-env
       TRAINING_EXPORT_DIR: /export/coupang
+      STATE_DIR: /app/service/var/state
     shm_size: 1gb
     volumes:
       - scrape-var:/app/service/var
@@ -68,7 +69,7 @@ services:
       redis: { condition: service_healthy }
 
   worker-detect:
-    build: { context: .., dockerfile: service/docker/python.Dockerfile }
+    build: { context: .., dockerfile: Dockerfile.backend }
     env_file: .env
     environment: *py-env
     command: celery -A realstar_worker.celery_app worker -Q detect -c 2 -n detect@%h

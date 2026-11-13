@@ -1,0 +1,24 @@
+# Heroku 백엔드 앱(컨테이너 스택) — 가이드: docs/deploy-heroku.md
+# 프로세스: web(API) · detect(탐지·집계 워커, 모델을 프로세스 안에서 로드) · scrape(수집 워커, Chrome)
+# 홈페이지(Next.js)는 별도 Heroku 앱(Node 빌드팩)으로 배포한다.
+build:
+  docker:
+    web: Dockerfile.backend
+    scrape: Dockerfile.scraper
+  config:
+    # 이미지 입력(OCR)까지 쓰려면 ocr 추가: api,worker,postgres,ocr  (web 다이노 메모리 1GB 이상 권장)
+    PIP_EXTRAS: api,worker,postgres
+release:
+  image: web
+  command:
+    - alembic upgrade head
+run:
+  web: sh -c 'uvicorn --factory realstar_api.main:create_app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers'
+  detect:
+    command:
+      - celery -A realstar_worker.celery_app worker -Q detect -c 1 -n detect@%h
+    image: web
+  scrape:
+    command:
+      - sh -c 'if [ "$SCRAPER_HEADLESS" = "true" ]; then exec celery -A realstar_worker.celery_app worker -Q scrape -c 1 --prefetch-multiplier 1 -n scrape@%h; else exec xvfb-run -a -s "-screen 0 1366x900x24" celery -A realstar_worker.celery_app worker -Q scrape -c 1 --prefetch-multiplier 1 -n scrape@%h; fi'
+    image: scrape

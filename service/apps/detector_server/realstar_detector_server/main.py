@@ -36,7 +36,9 @@ def make_server_backend() -> DetectorBackend:
     if kind == "dummy":
         log.warning("DETECTOR_BACKEND=dummy — 개발용 더미 판별기로 동작합니다")
         return DummyDetectorBackend(min_chars=settings.min_chars)
-    return RealstarModelBackend(Path(os.environ.get("MODEL_ARTIFACT_PATH", str(settings.model_artifact_path))))
+    return RealstarModelBackend(
+        Path(os.environ.get("MODEL_ARTIFACT_PATH", str(settings.model_artifact_path))), settings.model_artifact_url
+    )
 
 
 def create_app(backend: DetectorBackend | None = None) -> FastAPI:

@@ -1,0 +1,30 @@
+# API · detect 워커 · detector 서버 공용 이미지.
+# 빌드 컨텍스트 = 저장소 루트(model/ 포함). Heroku(heroku.yml)는 Dockerfile이 있는 폴더를 컨텍스트로 쓰므로 루트에 둔다.
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+COPY service/pyproject.toml service/
+COPY service/packages service/packages
+COPY service/apps/api service/apps/api
+COPY service/apps/worker service/apps/worker
+COPY service/apps/detector_server service/apps/detector_server
+# OCR(이미지 입력)까지 넣으려면 PIP_EXTRAS에 ocr을 더한다(이미지 크기·메모리 증가)
+ARG PIP_EXTRAS=api,worker,postgres
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libgomp1 && rm -rf /var/lib/apt/lists/*
+RUN pip install "./service[${PIP_EXTRAS}]"
+# OCR을 넣었으면 한국어 OCR 모델을 빌드 때 미리 받아 둔다(첫 요청 지연 방지). 실행 사용자와 무관하게 읽히도록 HOME 고정.
+ENV HOME=/opt/realstar-home
+RUN mkdir -p "$HOME" \
+ && if echo ",${PIP_EXTRAS}," | grep -q ",ocr,"; then \
+      python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='korean', use_angle_cls=True, show_log=False)"; fi \
+ && chmod -R a+rwX "$HOME"
+COPY service/alembic.ini service/alembic.ini
+COPY service/migrations service/migrations
+# AI 모델 패키지(model/)는 개발이 끝나 pyproject.toml이 생기면 자동으로 함께 설치된다.
+COPY model /app/model
+ARG INSTALL_MODEL=auto
+RUN if [ -f /app/model/pyproject.toml ] && [ "$INSTALL_MODEL" != "no" ]; then pip install -e /app/model; \
+    else echo "realstar_model 없음: 모델 개발 완료 후 이미지를 다시 빌드하세요"; fi
+WORKDIR /app/service
+ENV STATE_DIR=/tmp/realstar/state SCRAPER_DEBUG_HTML_DIR=/tmp/realstar/scrape_html HF_HOME=/tmp/hf
+CMD ["sh", "-c", "uvicorn --factory realstar_api.main:create_app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers"]

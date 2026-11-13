@@ -53,7 +53,48 @@ def is_ui_line(text: str) -> bool:
     return not HANGUL_OR_LATIN.search(text)
 
 
+def merge_into_lines(boxes: list[OcrLine]) -> list[OcrLine]:
+    """OCR 엔진이 단어 단위로 준 상자를 같은 줄끼리 합친다(PaddleOCR은 띄어쓰기마다 상자를 나누기도 한다).
+
+    세로 중심이 줄 높이의 절반 이내이고 가로 간격이 글자 높이의 2배 이내면 같은 줄로 본다.
+    """
+    # 1단계: 세로 위치가 같은 상자끼리 묶는다(가로 순서와 무관)
+    bands: list[list[OcrLine]] = []
+    for box in sorted(boxes, key=lambda x: (x.bbox[1] + x.bbox[3]) / 2):
+        cy = (box.bbox[1] + box.bbox[3]) / 2
+        for band in bands:
+            bcy = sum((x.bbox[1] + x.bbox[3]) / 2 for x in band) / len(band)
+            bh = sum(x.height for x in band) / len(band)
+            if abs(cy - bcy) <= 0.5 * max(box.height, bh) and abs(box.height - bh) <= 0.5 * max(box.height, bh):
+                band.append(box)
+                break
+        else:
+            bands.append([box])
+    # 2단계: 같은 줄 안에서 가로 간격이 글자 높이의 2배를 넘으면 다른 덩어리로 나눈다(예: 장바구니 / 바로구매 버튼)
+    rows: list[list[OcrLine]] = []
+    for band in bands:
+        band.sort(key=lambda x: x.bbox[0])
+        cur = [band[0]]
+        for box in band[1:]:
+            h = max(box.height, cur[-1].height)
+            if box.bbox[0] - max(x.bbox[2] for x in cur) > 2.0 * h:
+                rows.append(cur)
+                cur = [box]
+            else:
+                cur.append(box)
+        rows.append(cur)
+    out = []
+    for row in rows:
+        row.sort(key=lambda x: x.bbox[0])
+        x0, y0 = min(x.bbox[0] for x in row), min(x.bbox[1] for x in row)
+        x1, y1 = max(x.bbox[2] for x in row), max(x.bbox[3] for x in row)
+        conf = sum(x.confidence * len(x.text) for x in row) / max(1, sum(len(x.text) for x in row))
+        out.append(OcrLine(" ".join(x.text for x in row), (x0, y0, x1, y1), conf))
+    return out
+
+
 def guess_product_text(lines: list[OcrLine], image_height: float) -> ProductTextGuess:
+    lines = merge_into_lines(lines)
     _, markers = _phrases()
     joined = " ".join(ln.text for ln in lines).lower()
     is_coupang = any(m in joined for m in markers)

@@ -1,0 +1,13 @@
+# 저장소 루트 컨텍스트(Dockerfile.backend / Dockerfile.scraper)용
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+service/var
+service/apps/web
+docs/screenshots
+model/data
+**/*.egg-info

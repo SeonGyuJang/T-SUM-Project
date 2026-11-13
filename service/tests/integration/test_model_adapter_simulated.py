@@ -124,3 +124,36 @@ def test_full_pipeline_with_model(fake_model_pkg: Path, settings: Settings) -> N
     assert "dummy_detector" not in codes and "preprocess_unavailable" not in codes
     assert res["ratings"]["corrected"]["method"] == "rogan_gladen"  # manifest의 sens/spec 사용
     assert res["top_human_reviews"]["5"][0]["reason_tags"] == ["구어체 표현"]
+
+
+def test_prepare_demo_with_model(fake_model_pkg: Path, settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """시연 상품 목록 → 실제 분석(모델 연결 상태) → 발표 모드 데이터·index.ts 생성."""
+    import realstar.config as cfg
+    from realstar import cli
+
+    s = settings.model_copy(update={"detector_mode": "inprocess", "model_artifact_path": fake_model_pkg})
+    monkeypatch.setattr(cli, "get_settings", lambda: s)
+    monkeypatch.setattr(cfg, "SERVICE_ROOT", tmp_path)  # 실제 웹 데이터 폴더를 건드리지 않게
+    products = tmp_path / "products.txt"
+    products.write_text("# 주석\nhttps://www.coupang.com/vp/products/1000000001?itemId=1&q=%EC%B2%AD%EC%86%8C%EA%B8%B0\n"
+                        "https://link.coupang.com/a/demo01\n", encoding="utf-8")
+    assert cli.main(["prepare-demo", "--products", str(products)]) == 0
+    data_dir = tmp_path / "apps" / "web" / "src" / "demo" / "data"
+    ex = json.loads((data_dir / "p1000000001.json").read_text())
+    assert ex["is_placeholder"] is False and ex["input_examples"]["query"] == "청소기"
+    assert ex["result"]["model"]["version"] == "det-ko-review-v1.0"
+    assert [r["star"] for r in ex["replay"] if r["stage"] == "collect"] == [5, 4, 3, 2, 1]
+    index = (data_dir / "index.ts").read_text()
+    assert 'import ex0 from "./p1000000001.json";' in index and "DEMO_DATA" in index
+
+
+def test_prepare_demo_refuses_dummy(settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import realstar.config as cfg
+    from realstar import cli
+
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cfg, "SERVICE_ROOT", tmp_path)
+    products = tmp_path / "p.txt"
+    products.write_text("https://www.coupang.com/vp/products/1000000002\n", encoding="utf-8")
+    assert cli.main(["prepare-demo", "--products", str(products)]) == 1
+    assert not (tmp_path / "apps").exists()

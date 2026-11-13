@@ -19,7 +19,20 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize(("url", "expected"), CASES)
+# 오너가 준 실제 상품 링크(2026-11-13, 시연 후보). 광고·검색 추적 파라미터가 붙어 있다.
+REAL_LINKS = [
+    ("https://www.coupang.com/vp/products/9727152538?itemId=29108761203&vendorItemId=96027261679&sourceType=srp_product_ads&clickEventId=a61ba9f0-df4e-11f1-b948-e3a3976c00ad&clickEventId=a61ba9f0-df4e-11f1-b948-e3a3976c00ad&korePlacement=15&korePlacement=15&koreSubPlacement=5&koreSubPlacement=5&q=%EC%A0%84%EA%B8%B0%EC%9E%A5%ED%8C%90&searchId=2ec5ff423648677&searchRank=1&traceId=mweuirws",
+     ("9727152538", "29108761203", "96027261679")),
+    ("https://www.coupang.com/vp/products/9751850127?itemId=29200410159&vendorItemId=96120828949&q=%EB%B9%84%ED%83%80%EB%AF%BC&searchId=b8384a8f3672714&sourceType=search&rank=16&itemsCount=60&searchRank=16&traceId=mweumu2g",
+     ("9751850127", "29200410159", "96120828949")),
+    ("https://www.coupang.com/vp/products/6495672127?itemId=23899285883&vendorItemId=90883714958&pickType=COU_PICK&q=%EB%B3%B4%ED%98%B8%ED%95%84%EB%A6%84&searchId=837fe5303680191&sourceType=search&rank=3&itemsCount=60&searchRank=3&traceId=mweuneub",
+     ("6495672127", "23899285883", "90883714958")),
+    ("https://www.coupang.com/vp/products/9413318168?itemId=28069822700&vendorItemId=95026426105&q=%EB%A7%A5%EB%B6%81&searchId=798ee2a13079849&sourceType=search&rank=0&itemsCount=60&searchRank=0&traceId=mweunspn",
+     ("9413318168", "28069822700", "95026426105")),
+]
+
+
+@pytest.mark.parametrize(("url", "expected"), CASES + REAL_LINKS)
 def test_parse_product_url(url: str, expected: tuple[str, str | None, str | None]) -> None:
     p = parse_product_url(url)
     assert p is not None

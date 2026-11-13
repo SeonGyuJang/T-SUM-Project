@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import ssl
+
 from celery import Celery
 
 from realstar.config import get_settings
@@ -32,3 +34,7 @@ app.conf.update(
     # 수집 작업은 차단 시 즉시 중단해야 하므로 Celery 자동 재시도를 쓰지 않는다
     task_default_retry_delay=0,
 )
+if broker.startswith("rediss://"):
+    # Heroku Key-Value Store: TLS + 자체 서명 인증서
+    app.conf.broker_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+    app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}

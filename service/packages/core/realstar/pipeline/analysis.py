@@ -76,7 +76,7 @@ class AnalysisPipeline:
             s = self.settings
             self._detector = make_backend(
                 s.detector_mode, detector_url=s.detector_url, artifact_path=s.model_artifact_path,
-                min_chars=s.min_chars, timeout=s.detector_timeout_sec,
+                min_chars=s.min_chars, timeout=s.detector_timeout_sec, artifact_url=s.model_artifact_url,
             )
         return self._detector
 

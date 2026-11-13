@@ -3,25 +3,25 @@
 > README 0-9, 14.2에 따라 서비스·홈페이지 쪽 결정을 날짜와 함께 남긴다. 모델 쪽 결정은 `model/MODEL_DEV.md` 3장.
 > 날짜는 Asia/Seoul 기준.
 
-## 1. 오너 질문 (README 14.2) — ⏳ 답변 대기
+## 1. 오너 질문 (README 14.2)
 
-2026-11-13 작업은 "AI 모델 개발을 제외한 나머지 모든 기능을 개발해 달라"는 요청(R-S001)에 따라 **질문 답변 없이 추천 기본값으로 진행**했다.
-기본값을 쓴 곳은 코드·화면에 `TODO(owner)`로 표시했다. 답을 받으면 아래 표의 "답변" 칸을 채우고 해당 위치를 고친다.
+2026-11-13 1차 작업은 "AI 모델 개발을 제외한 나머지 모든 기능을 개발해 달라"는 요청(R-S001)에 따라 추천 기본값으로 진행했고,
+같은 날 오너 답변(R-S002)을 받아 아래 "답변" 칸에 기록했다. 아직 열린 항목만 코드·화면에 `TODO(owner)`로 남아 있다.
 
 | # | 질문 | 사용한 기본값 | 바꿀 위치 | 답변 |
 |---|---|---|---|---|
-| Q1 | 서비스 이름과 한 줄 소개 | "리얼별점" / "AI가 쓴 리뷰를 걸러낸 진짜 별점" | `service/apps/web/src/lib/site.ts`, `scripts/make-og.mjs`(OG 이미지 재생성) | |
-| Q2 | 로고 유무, 브랜드 색상 | 텍스트 로고 + 별 아이콘(자체 SVG), 남색 `#1E3A8A` 단일 강조색 | `src/app/globals.css`의 `--primary*`, `src/components/layout/logo.tsx`, `src/app/icon.svg` | |
-| Q3 | 발표 일시·시간·화면 해상도 | 1920×1080, 시연 3분 | `docs/demo-checklist.md` | |
-| Q4 | 발표장 인터넷·기기 | 인터넷 불안정 가정 → 발표 모드(오프라인) 구현 | `docs/demo-checklist.md` | |
-| Q5 | 시연용 예시 상품 3~5개 | **가상 예시 3개(샘플 데이터 배지 표시)**. 실제 상품 미선정 | `src/demo/data/*.json` ← `python -m realstar export-demo` | |
-| Q6 | 배포 위치 | 로컬 시연 (+ 선택적 Vercel) | `NEXT_PUBLIC_SITE_URL`, `CORS_ORIGINS` | |
+| Q1 | 서비스 이름과 한 줄 소개 | "리얼별점" / "AI가 쓴 리뷰를 걸러낸 진짜 별점" | `service/apps/web/src/lib/site.ts`, `scripts/make-og.mjs`(OG 이미지 재생성) | ⏳ 팀원과 논의 후 결정 (2026-11-13). 그때까지 기본값 유지 |
+| Q2 | 로고 유무, 브랜드 색상 | 텍스트 로고 + 별 아이콘(자체 SVG), 남색 `#1E3A8A` 단일 강조색 | `src/app/globals.css`의 `--primary*`, `src/components/layout/logo.tsx`, `src/app/icon.svg` | ✅ 전반적으로 괜찮음. 진행하면서 필요할 때 수정 (2026-11-13) |
+| Q3 | 발표 일시·시간·화면 해상도 | 1920×1080, 시연 3분 | `docs/demo-checklist.md` | ✅ 아직 고려하지 않음 (2026-11-13) |
+| Q4 | 발표장 인터넷·기기 | 인터넷 불안정 가정 → 발표 모드(오프라인) 구현 | `docs/demo-checklist.md` | ✅ 인터넷에 접속해 실제 서비스로 시연 → 오프라인 대비 불필요. 발표 모드는 예비용으로만 유지 (2026-11-13) |
+| Q5 | 시연용 예시 상품 3~5개 | **가상 예시 3개(샘플 데이터 배지 표시)**. 실제 상품 미선정 | `src/demo/data/*.json` ← `python -m realstar export-demo` | ✅ 실제 상품 4개 제공(전기장판·비타민·보호필름·맥북) → `docs/demo-products.txt` (2026-11-13). 실제 모델 연결 후 `prepare-demo`로 교체 예정 |
+| Q6 | 배포 위치 | 로컬 시연 (+ 선택적 Vercel) | `NEXT_PUBLIC_SITE_URL`, `CORS_ORIGINS` | ✅ 도메인 없음, Heroku 배포 예정 (2026-11-13) → `docs/deploy-heroku.md` |
 | Q7 | 팀/제작자 소개, 연락처 | 노출 안 함. 소개 페이지는 프로젝트 배경만 | `site.contactEmail`, `src/app/about/page.tsx` | |
 | Q8 | 모델 성능 공개 여부 | 공개. 평가 전이라 "평가 후 공개" 문구 | `site.modelMetrics` | |
 | Q9 | 다크 모드 | 라이트 모드만 | — | |
-| Q10 | 약관·개인정보처리방침 | 에이전트 초안 + "검토 중인 초안(법률 자문 아님)" 안내 | `src/app/terms`, `src/app/privacy`, `legal-draft-note.tsx` | |
+| Q10 | 약관·개인정보처리방침 | 에이전트 초안 + "검토 중인 초안(법률 자문 아님)" 안내 | `src/app/terms`, `src/app/privacy`, `legal-draft-note.tsx` | ✅ 지금은 고려하지 않음. 실서비스 전환 시 검토 (2026-11-13). 초안 페이지는 그대로 둠 |
 | Q11 | 방문자 분석 도구 | 사용 안 함(외부 스크립트 0개) | `src/app/privacy/page.tsx` 4항 | |
-| Q12 | 디자인 참고·회피 스타일 | 없음. **W1 시안 2종 대신 1종으로 바로 구현**(D-S08) | — | |
+| Q12 | 디자인 참고·회피 스타일 | 없음. **W1 시안 2종 대신 1종으로 바로 구현**(D-S08) | — | ✅ 현재 디자인 유지(Q2 답변) — 시안 2종 절차 불필요 (2026-11-13) |
 
 ## 2. TBD (README 13장) 기본값 사용 현황
 
@@ -32,7 +32,7 @@
 | TBD-4 | 자동 선택 0.85 / 간격 0.15 | `config.py`, `resolver/scoring.py` `# TBD-4: 기본값 사용` |
 | TBD-5 | VLM 미사용(OCR만) | `config.py`, `.env.example` |
 | TBD-6 | 제목 포함 — 탐지 입력 구성은 model 패키지 담당. service는 title·content를 따로 넘긴다 | `DetectInput` |
-| TBD-10 | 브라우저 headless=false (Docker에서는 Xvfb) | `config.py`, `docker/scraper.Dockerfile` |
+| TBD-10 | 브라우저 headless=false (Docker에서는 Xvfb) | `config.py`, `Dockerfile.scraper` (Heroku 권장: `SCRAPER_HEADLESS=true`) |
 | TBD-2, 7, 8, 9 | 모델 쪽 결정(MODEL_DEV.md) | — |
 
 ## 3. 서비스 쪽 결정
@@ -46,14 +46,19 @@
 | D-S05 | 2026-11-13 | DB 스키마에 README 5.9 외 컬럼 추가: `products.category/reviews_fetched_at/sampling`, `reviews.option_name/raw_html_ref`, `analyses.cached/force_refresh/input`. | 리뷰 표본 캐시 유효성(같은 표본 조건인지) 판단, RawReview 필드 보존 | 유효 |
 | D-S06 | 2026-11-13 | 상품명·단축 링크 해석도 브라우저를 쓰므로 수집 큐(동시성 1)와 같은 전역 락을 쓴다. 수집 중이면 `RESOLVE_TIMEOUT_SEC`(90초) 대기 후 "다른 분석 수집 중" 안내. 검색 캐시가 있으면 브라우저 없이 답한다. | 브라우저 1개·전역 동시 1개 규칙(README 0-3, 4장) | 유효 |
 | D-S07 | 2026-11-13 | 이미지 OCR은 API 프로세스 메모리에서만 처리하고, 추출한 검색어만 수집 워커로 보낸다(이미지를 큐·DB·디스크에 두지 않음). EXIF는 픽셀만 새 이미지로 복사해 제거. | README 5.1 (c) "원본 저장 안 함" | 유효 |
-| D-S08 | 2026-11-13 | W1 디자인 시안 2종 승인 절차를 생략하고 1종(남색 단일 강조색, Pretendard, 테두리 위주 카드)으로 W2까지 구현했다. 토큰이 CSS 변수로 분리돼 있어 오너 의견에 따라 바꾸기 쉽다. | 오너 부재 중 전체 구현 요청(R-S001). 승인 대기 항목으로 남김 | **오너 확인 필요** |
+| D-S08 | 2026-11-13 | W1 디자인 시안 2종 승인 절차를 생략하고 1종(남색 단일 강조색, Pretendard, 테두리 위주 카드)으로 W2까지 구현했다. 토큰이 CSS 변수로 분리돼 있어 오너 의견에 따라 바꾸기 쉽다. | 오너 부재 중 전체 구현 요청(R-S001) | 유효 — 오너 확인(Q2) |
 | D-S09 | 2026-11-13 | 발표 모드는 MSW가 아닌 브라우저 내 로컬 구현으로 동작한다(서비스 워커 등록 실패 위험 제거). 개발용 목업 모드는 MSW. 두 모드 모두 같은 로컬 로직(`lib/api/local-backend.ts`)을 쓴다. | 발표 안정성(README 14.1-4) | 유효 |
 | D-S10 | 2026-11-13 | 발표 모드 예시 3개는 **가상 데이터**이며 화면에 "샘플 데이터" 배지와 경고가 표시된다. 숫자는 서비스와 같은 계산 함수로 만들었고 예시 A는 README 5.4 고정 검증 예제와 같다. 실제 발표 전 Q5 상품을 실제로 분석해 교체해야 한다. | 저장 데이터를 실제 결과로 꾸미지 않기(README 14.7) | 유효 |
 | D-S11 | 2026-11-13 | 수집 중 '리뷰 영역이 연속으로 비어 있음' 판정: 해당 별점에서 하나도 못 읽었는데(N_s>0) 빈 페이지가 나오면 1회로 세고, 연속 `SCRAPER_EMPTY_STREAK_LIMIT`(3)회면 차단 처리. 이미 읽은 뒤의 빈 페이지는 목록 끝으로 본다. | 차단 오탐(목록 끝)과 미탐을 함께 줄이기 위함 | 유효 |
+| D-S13 | 2026-11-13 | Heroku 배포는 앱 2개: 백엔드(container 스택, `heroku.yml`: web·detect·scrape·release)와 홈페이지(Node 빌드팩 + monorepo 빌드팩). Heroku에서는 detector HTTP 서버 대신 `detect` 워커가 모델을 프로세스 안에서 로드한다(`DETECTOR_MODE=inprocess`). | Heroku는 앱당 외부 web 프로세스 1개, 다이노 간 내부 통신 없음 | 유효 |
+| D-S14 | 2026-11-13 | 백엔드 Dockerfile을 저장소 루트(`Dockerfile.backend`, `Dockerfile.scraper`)로 옮겼다. `heroku.yml`도 루트. README 7장 폴더 분리 원칙의 예외(배포 설정 파일). | Heroku는 Dockerfile이 있는 폴더를 빌드 컨텍스트로 고정하는데, 이미지에 `service/`와 `model/`이 모두 필요 | 유효 |
+| D-S15 | 2026-11-13 | 볼륨 없는 배포를 위해 `MODEL_ARTIFACT_URL`(tar.gz)을 지원: 아티팩트 폴더가 없으면 시작 시 받아서 푼다. Heroku 형식 대응: `postgres://` 정규화, `rediss://` 자체 서명 인증서 허용, SSE 15초 keep-alive, 해석 대기 25초. | Heroku 파일시스템 임시·요청 30초 제한·Key-Value Store TLS | 유효 |
+| D-S16 | 2026-11-13 | 시연 상품은 `docs/demo-products.txt`로 관리하고 `python -m realstar prepare-demo`가 실제 분석 → 발표 데이터 내보내기 → `src/demo/data/index.ts` 재생성을 한 번에 한다. 더미 판별기 결과는 거부. 실제 상품 데이터를 손으로 만들어 넣지 않는다. | Q5 답변. 실제 상품에 대해 꾸며낸 결과를 보여주지 않기 위함 | 유효 |
 | D-S12 | 2026-11-13 | 결과 페이지(`/analyses/*`)는 `noindex`, robots.txt에서도 제외. | 개별 분석 결과는 검색 노출 대상이 아님. Lighthouse SEO 점수가 이 페이지만 낮은 이유 | 유효 |
 
 ## 4. 사용자 요청 기록
 
 | ID | 날짜 | 요청(요약) | 반영 |
 |---|---|---|---|
+| R-S002 | 2026-11-13 | "서비스 이름은 팀원과 논의 후 결정. 디자인·색상은 괜찮고 진행하며 수정. 발표 일시·해상도는 고려 안 해도 됨, 인터넷 접속해서 사용. 시연 상품 링크 4개 제공. 도메인 없고 Heroku 배포 예정. 약관·개인정보는 실서비스 전환 시 검토." | Q1~Q6·Q10·Q12 답변 기록, Heroku 배포 구성(D-S13~15), 시연 상품 준비 명령(D-S16) |
 | R-S001 | 2026-11-13 | "AI 모델 개발은 시간이 걸리니 AI 모델 개발을 제외한 나머지 모든 기능을 개발해 달라. 나중에 저장된 모델만 불러와 실행하면 되도록, AI 개발 완료 후 바로 돌아갈 수 있게 구성해 달라." | `service/` 전체 구현. 모델 연결 방법은 `docs/model-integration.md`. `model/` 폴더는 수정하지 않음. |

@@ -42,15 +42,48 @@ def read_manifest(artifact: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def ensure_artifact(artifact_path: Path, url: str, timeout: float = 600.0) -> None:
+    """아티팩트 폴더가 없고 URL이 있으면 tar.gz를 받아 풀어 둔다(볼륨 없는 배포용: Heroku 등).
+
+    tar.gz 안에 manifest.json이 최상위에 있거나, 아티팩트 폴더 하나가 들어 있어도 된다.
+    """
+    import io
+    import shutil
+    import tarfile
+    import tempfile
+
+    artifact_path = Path(artifact_path)
+    if (artifact_path / "manifest.json").exists() or not url:
+        return
+    log.info("downloading model artifact from %s", url.split("?")[0])
+    with httpx.stream("GET", url, timeout=timeout, follow_redirects=True) as r:
+        r.raise_for_status()
+        buf = io.BytesIO(r.read())
+    with tempfile.TemporaryDirectory() as tmp, tarfile.open(fileobj=buf, mode="r:*") as tar:
+        tar.extractall(tmp, filter="data")  # 경로 탈출·링크 공격 차단
+        found = next(iter(sorted(Path(tmp).rglob("manifest.json"), key=lambda p: len(p.parts))), None)
+        if found is None:
+            raise ValueError("artifact archive has no manifest.json")
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(found.parent), str(artifact_path))
+
+
 class RealstarModelBackend:
-    def __init__(self, artifact_path: Path) -> None:
+    def __init__(self, artifact_path: Path, artifact_url: str = "") -> None:
         self.artifact_path = Path(artifact_path)
+        self.artifact_url = artifact_url
         self._detector: Any = None
         self._error: str | None = None
         self._manifest: dict[str, Any] = {}
         self._load()
 
     def _load(self) -> None:
+        if self.artifact_url:
+            try:
+                ensure_artifact(self.artifact_path, self.artifact_url)
+            except Exception as e:
+                self._error = f"모델 아티팩트 다운로드 실패: {type(e).__name__}: {e}"
+                return
         try:
             from realstar_model.inference import Detector  # type: ignore[import-not-found]
         except Exception as e:
@@ -172,9 +205,30 @@ class DummyDetectorBackend:
         return out
 
 
-def make_backend(mode: str, *, detector_url: str, artifact_path: Path, min_chars: int, timeout: float = 120.0) -> DetectorBackend:
+def light_info(mode: str, *, detector_url: str, artifact_path: Path, min_chars: int) -> ModelInfo:
+    """상태 확인용: 모델을 메모리에 올리지 않고 준비 여부만 본다(/api/health)."""
+    if mode == "dummy":
+        return DummyDetectorBackend(min_chars=min_chars).info()
+    if mode == "http":
+        return HttpDetectorBackend(detector_url).info()
+    m = read_manifest(artifact_path)
+    try:
+        import realstar_model.inference  # type: ignore[import-not-found]  # noqa: F401
+
+        pkg_ok, err = True, None
+    except Exception as e:
+        pkg_ok, err = False, f"realstar_model 패키지를 불러올 수 없음: {type(e).__name__}"
+    if pkg_ok and not m:
+        err = f"모델 아티팩트가 아직 없음(첫 판별 때 MODEL_ARTIFACT_URL에서 받음): {artifact_path}"
+    return ModelInfo(ready=pkg_ok and bool(m), backend="realstar_model(inprocess)", model_version=m.get("model_version"),
+                     thresholds=m.get("thresholds"), min_chars=m.get("min_chars"), error=err)
+
+
+def make_backend(
+    mode: str, *, detector_url: str, artifact_path: Path, min_chars: int, timeout: float = 120.0, artifact_url: str = ""
+) -> DetectorBackend:
     if mode == "inprocess":
-        return RealstarModelBackend(artifact_path)
+        return RealstarModelBackend(artifact_path, artifact_url)
     if mode == "dummy":
         return DummyDetectorBackend(min_chars=min_chars)
     return HttpDetectorBackend(detector_url, timeout=timeout)

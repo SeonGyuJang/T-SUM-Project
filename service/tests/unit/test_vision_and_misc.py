@@ -214,3 +214,28 @@ def test_filter_before() -> None:
 def test_search_candidate_roundtrip() -> None:
     c = SearchCandidate(product_id="1", name="a", price=100)
     assert SearchCandidate.model_validate(c.model_dump()) == c
+
+
+def test_merge_word_boxes_into_lines() -> None:
+    """실제 PaddleOCR 출력(단어 단위 상자)을 줄로 합친 뒤 상품명 줄을 고른다(2026-11-13 실측 결과 기반)."""
+    from realstar.vision.product_text_heuristics import merge_into_lines
+
+    words = [
+        OcrLine("로켓배송", (30, 22, 105, 44), 1.0),
+        OcrLine("논껌", (30, 76, 96, 112), 0.83),
+        OcrLine("전기요", (104, 77, 201, 111), 1.0),
+        OcrLine("전기장판", (212, 76, 343, 112), 1.0),
+        OcrLine("BKB-9502", (352, 77, 538, 111), 0.99),
+        OcrLine("싱글", (547, 73, 617, 116), 1.0),
+        OcrLine("15%", (30, 134, 78, 157), 1.0),
+        OcrLine("89000원", (92, 135, 197, 159), 1.0),
+        OcrLine("75650원", (30, 182, 200, 223), 1.0),
+        OcrLine("2345개", (140, 261, 227, 289), 1.0),
+        OcrLine("상품평", (232, 262, 294, 284), 1.0),
+        OcrLine("장바구니", (30, 425, 133, 454), 1.0),
+    ]
+    merged = merge_into_lines(words)
+    assert "논껌 전기요 전기장판 BKB-9502 싱글" in [m.text for m in merged]
+    g = guess_product_text(words, 520)
+    assert g.query == "논껌 전기요 전기장판 BKB-9502 싱글"
+    assert g.model_number == "bkb9502" and g.is_coupang_screenshot

@@ -6,6 +6,7 @@
   smoke --url <링크>                 일일 셀렉터 스모크 테스트 (상품 1개)
   export-training --targets <파일>   학습용 과거 리뷰를 model/data/raw/coupang/로 내보냄
   export-demo --analysis-id <id>     저장된 실제 분석 결과를 웹 발표 모드 데이터로 내보냄
+  prepare-demo --products <파일>     시연 상품 목록을 실제 분석 → 발표 모드 데이터로 한 번에 교체
   cooldown [--clear]                 차단 쿨다운 상태 확인/해제
 """
 
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 import time
 from datetime import UTC, datetime
@@ -174,35 +176,120 @@ def cmd_export_training(args: argparse.Namespace) -> int:
     return 0 if outcome == "ok" else 1
 
 
-def cmd_export_demo(args: argparse.Namespace) -> int:
+DEMO_DATA_DIR_PARTS = ("apps", "web", "src", "demo", "data")
+
+
+def export_demo_example(settings: Settings, analysis_id: str, key: str, query: str | None, out: Path | None = None) -> Path:
     """실제로 분석해 저장한 결과를 웹 발표 모드 데이터(JSON)로 내보낸다(README 14.7)."""
+    from realstar.config import SERVICE_ROOT
     from realstar.db.models import Analysis
     from realstar.db.session import session_scope
 
-    s = _settings(args)
-    with session_scope(s.database_url) as sess:
-        a = sess.get(Analysis, args.analysis_id)
+    with session_scope(settings.database_url) as sess:
+        a = sess.get(Analysis, analysis_id)
         if a is None or a.status != "done":
-            print("analysis not found or not done", file=sys.stderr)
-            return 1
+            raise SystemExit(f"analysis {analysis_id} not found or not done")
         if (a.result or {}).get("model", {}).get("is_dummy"):
-            print("더미 판별기 결과는 발표 데이터로 내보낼 수 없어요.", file=sys.stderr)
-            return 1
+            raise SystemExit("더미 판별기 결과는 발표 데이터로 내보낼 수 없어요. 실제 모델을 연결한 뒤 다시 분석하세요.")
         stars = (a.progress or {}).get("stars", {})
-        log = [
-            {"stage": "resolve", "t": 0},
-            *[{"stage": "collect", "star": int(k), "collected": v.get("collected", 0), "target": v.get("target", 0)} for k, v in stars.items()],
+        replay = [
+            {"stage": "resolve"},
+            *[{"stage": "collect", "star": int(k), "collected": v.get("collected", 0), "target": v.get("target", 0)}
+              for k, v in sorted(stars.items(), key=lambda kv: -int(kv[0]))],
             {"stage": "detect"}, {"stage": "aggregate"},
         ]
-        example = {"key": args.key, "is_placeholder": False, "input_examples": {"url": (a.result or {}).get("product", {}).get("url"), "query": args.query},
-                   "result": a.result, "replay": log}
+        example = {"key": key, "is_placeholder": False,
+                   "input_examples": {"url": (a.result or {}).get("product", {}).get("url"), "query": query},
+                   "result": a.result, "replay": replay}
+    path = out or SERVICE_ROOT.joinpath(*DEMO_DATA_DIR_PARTS, f"{key}.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(example, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def write_demo_index(keys: list[str]) -> Path:
+    """웹이 읽는 예시 목록(src/demo/data/index.ts)을 다시 만든다."""
     from realstar.config import SERVICE_ROOT
 
-    out = Path(args.out or SERVICE_ROOT / "apps" / "web" / "src" / "demo" / "data" / f"{args.key}.json")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(example, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"demo example written: {out}")
+    lines = ["// 자동 생성: python -m realstar prepare-demo / export-demo --update-index", ""]
+    lines += [f'import ex{i} from "./{k}.json";' for i, k in enumerate(keys)]
+    lines += ["", f"export const DEMO_DATA: unknown[] = [{', '.join(f'ex{i}' for i in range(len(keys)))}];", ""]
+    path = SERVICE_ROOT.joinpath(*DEMO_DATA_DIR_PARTS, "index.ts")
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def cmd_export_demo(args: argparse.Namespace) -> int:
+    s = _settings(args)
+    try:
+        path = export_demo_example(s, args.analysis_id, args.key, args.query, Path(args.out) if args.out else None)
+    except SystemExit as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"demo example written: {path}")
     return 0
+
+
+def cmd_prepare_demo(args: argparse.Namespace) -> int:
+    """시연 상품 목록을 차례로 실제 분석하고 발표 모드 데이터로 내보낸다(이전 예시는 목록에서 빠진다)."""
+    from urllib.parse import parse_qs, urlparse
+
+    from realstar.db.session import init_db
+    from realstar.pipeline.service import InlineDispatcher, RealstarService
+    from realstar.resolver.url import classify
+
+    s = _settings(args)
+    if s.database_url.startswith("sqlite"):
+        init_db(s.database_url)
+    links = [ln.strip() for ln in Path(args.products).read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")]
+    svc = RealstarService(s, InlineDispatcher(s))
+    keys: list[str] = []
+    failed = 0
+    for link in links:
+        url, parsed = classify(link)
+        res = svc.resolve_link(link) if parsed is None else None
+        pid = parsed.product_id if parsed else res.candidates[0].product_id  # type: ignore[union-attr]
+        if f"p{pid}" in keys:
+            print(f"[{pid}] 목록에 이미 있어 건너뜀", file=sys.stderr)
+            continue
+        query = (parse_qs(urlparse(url).query).get("q") or [""])[0] or None
+        started = svc.start_analysis(pid, force_refresh=args.force_refresh, input_={"type": "url", "value": link})
+        print(f"[{pid}] {started['analysis_id']} {started['status']}", file=sys.stderr)
+        while True:
+            view = svc.get_analysis(started["analysis_id"])
+            assert view is not None
+            if view["status"] in ("done", "failed", "blocked"):
+                break
+            time.sleep(2)
+        if view["status"] != "done":
+            failed += 1
+            print(f"[{pid}] {view['status']}: {(view['error'] or {}).get('message')}", file=sys.stderr)
+            if view["status"] == "blocked":
+                print("차단되어 중단합니다(쿨다운 후 다시 실행). 이미 내보낸 예시는 유지돼요.", file=sys.stderr)
+                break
+            continue
+        try:
+            path = export_demo_example(s, started["analysis_id"], f"p{pid}", query)
+        except SystemExit as e:
+            print(e, file=sys.stderr)
+            return 1
+        keys.append(f"p{pid}")
+        print(f"[{pid}] → {path}", file=sys.stderr)
+    # 이전 실행에서 이미 내보낸 상품(차단 등으로 이번에 못 한 것)도 목록 순서대로 포함한다
+    from realstar.config import SERVICE_ROOT
+
+    data_dir = SERVICE_ROOT.joinpath(*DEMO_DATA_DIR_PARTS)
+    ordered = []
+    for link in links:
+        m = re.search(r"/(?:vp|vm)/products/(\d+)", link)
+        k = f"p{m.group(1)}" if m else None
+        if k and k not in ordered and (data_dir / f"{k}.json").exists():
+            ordered.append(k)
+    ordered += [k for k in keys if k not in ordered]
+    if ordered:
+        print(f"index: {write_demo_index(ordered)}  ({len(ordered)}개)")
+        print("웹을 다시 빌드하면 발표 모드에 반영돼요.")
+    return 0 if keys and not failed else 1
 
 
 def cmd_cooldown(args: argparse.Namespace) -> int:
@@ -255,6 +342,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--query")
     sp.add_argument("--out")
     sp.set_defaults(fn=cmd_export_demo)
+    sp = sub.add_parser("prepare-demo"); common(sp)  # noqa: E702
+    sp.add_argument("--products", required=True, help="한 줄에 상품 링크 하나 (예: ../docs/demo-products.txt)")
+    sp.add_argument("--force-refresh", action="store_true")
+    sp.set_defaults(fn=cmd_prepare_demo)
     sp = sub.add_parser("cooldown"); common(sp)  # noqa: E702
     sp.add_argument("--clear", action="store_true")
     sp.set_defaults(fn=cmd_cooldown)

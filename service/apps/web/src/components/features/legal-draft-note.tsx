@@ -1,6 +1,6 @@
 import { Notice } from "@/components/ui/notice";
 
-/** TODO(owner): Q10 — 오너 검토·법률 검토 후 이 안내를 제거한다. */
+/** Q10(2026-11-13): 실서비스 전환 시 검토 예정. 검토가 끝나면 이 안내를 제거한다. */
 export function LegalDraftNote() {
   return (
     <Notice tone="info" title="검토 중인 초안이에요" className="mb-10">

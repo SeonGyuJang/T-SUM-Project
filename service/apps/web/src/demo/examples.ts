@@ -1,12 +1,11 @@
 /**
  * 발표 모드 예시 데이터 (README 14.7).
- * 각 JSON은 `python -m realstar export-demo`로 실제 분석 결과를 내보낸 것이어야 한다.
- * TODO(owner): Q5 예시 상품 확정 후 실제 분석 결과로 교체 — 현재 파일은 is_placeholder=true인 가상 예시다.
+ * 데이터 목록은 data/index.ts. `python -m realstar prepare-demo --products ../docs/demo-products.txt`가
+ * 오너가 고른 실제 상품(docs/demo-products.txt)을 분석해 이 목록을 실제 결과로 바꾼다.
+ * 현재는 실제 모델이 없어 is_placeholder=true인 가상 예시 3개가 들어 있다(화면에 "샘플 데이터" 표시).
  */
 import { analysisResultSchema, type AnalysisResult } from "@/lib/api/schema";
-import airfryer from "./data/airfryer.json";
-import tumbler from "./data/tumbler.json";
-import vacuum from "./data/vacuum.json";
+import { DEMO_DATA } from "./data";
 
 export type ReplayStep = { stage: string; star?: number; collected?: number; target?: number };
 
@@ -23,7 +22,7 @@ function load(raw: unknown): DemoExample {
   return { ...r, result: analysisResultSchema.parse(r.result) };
 }
 
-export const DEMO_EXAMPLES: DemoExample[] = [load(vacuum), load(tumbler), load(airfryer)];
+export const DEMO_EXAMPLES: DemoExample[] = DEMO_DATA.map(load);
 
 export function exampleByKey(key: string): DemoExample | undefined {
   return DEMO_EXAMPLES.find((e) => e.key === key);

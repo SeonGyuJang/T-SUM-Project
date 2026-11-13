@@ -4,7 +4,7 @@ import { site } from "@/lib/site";
 
 export const metadata: Metadata = { title: "개인정보처리방침", description: `${site.name} 개인정보처리방침` };
 
-// TODO(owner): Q10·Q11 확정 (현재 초안, 법률 자문 아님). 개인정보 보호책임자·연락처 기입 필요.
+// Q10(2026-11-13): 실서비스 전환 시 검토 예정. 현재 초안(법률 자문 아님). 확정 시 개인정보 보호책임자·연락처 기입.
 export default function PrivacyPage() {
   return (
     <article className="container-page section">

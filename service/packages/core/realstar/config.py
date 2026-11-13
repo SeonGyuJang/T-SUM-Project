@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SERVICE_ROOT = Path(__file__).resolve().parents[3]  # .../service
@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     scraper_debug_html_keep: int = 20
     scraper_chrome_binary: str | None = None  # 비워 두면 Selenium Manager가 찾는다
     scraper_chromedriver_path: str | None = None
+    # 컨테이너(Docker·Heroku)에서 Chrome을 띄울 때 필요한 표준 옵션(--no-sandbox, --disable-dev-shm-usage).
+    # 차단 우회와 무관한 실행 환경 옵션이다.
+    scraper_chrome_container: bool = False
     sample_per_star: int = 100
     review_sort: Literal["latest", "best"] = "latest"
 
@@ -62,12 +65,15 @@ class Settings(BaseSettings):
     task_backend: Literal["celery", "inline"] = "inline"
     state_dir: Path = SERVICE_ROOT / "var" / "state"
     cors_origins: str = "http://localhost:3000"
+    # 상품명·단축 링크 해석이 수집 큐를 기다리는 최대 시간. Heroku는 요청 30초 제한이 있어 25로 둔다.
     resolve_timeout_sec: int = 90
 
     # ── 탐지 / 집계 ───────────────────────────────────────
     # detector_mode: http(detector_server 호출) | inprocess(realstar_model 직접 로드) | dummy(개발 전용)
     detector_mode: Literal["http", "inprocess", "dummy"] = "http"
     model_artifact_path: Path = REPO_ROOT / "model" / "artifacts" / "det-ko-review-v1.0"
+    # 아티팩트 폴더가 없을 때 받아 올 tar.gz 주소(Heroku처럼 볼륨이 없는 배포용). 비우면 받지 않는다.
+    model_artifact_url: str = ""
     detector_batch_size: int = 64
     detector_timeout_sec: int = 120
     min_chars: int = 20
@@ -83,6 +89,20 @@ class Settings(BaseSettings):
     resolve_auto_top1: float = 0.85
     resolve_auto_gap: float = 0.15
     resolve_max_candidates: int = 5
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize_db_url(cls, v: str) -> str:
+        """Heroku Postgres는 postgres:// 형식을 준다 → SQLAlchemy + psycopg3 형식으로 바꾼다."""
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                return "postgresql+psycopg://" + v[len(prefix):]
+        return v
+
+    @property
+    def redis_ssl_kwargs(self) -> dict[str, object]:
+        """Heroku Key-Value Store는 rediss:// + 자체 서명 인증서를 쓴다(문서 권장: ssl_cert_reqs=None)."""
+        return {"ssl_cert_reqs": None} if self.redis_url.startswith("rediss://") else {}
 
     @property
     def cors_origin_list(self) -> list[str]:

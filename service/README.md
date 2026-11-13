@@ -25,7 +25,7 @@ service/
 │   ├── detector_server/         # /predict, /health (realstar_model 래퍼)
 │   └── web/                     # Next.js 홈페이지 (섹션 14)
 ├── migrations/                  # Alembic
-├── docker/, docker-compose.yml
+├── docker-compose.yml           # Dockerfile은 저장소 루트(Dockerfile.backend/.scraper, Heroku 빌드 컨텍스트 때문)
 └── tests/                       # unit / integration / contract, fixtures(html·json)
 ```
 
@@ -53,6 +53,11 @@ cd apps/web && npm run dev                                                      
 ```
 `dummy` 판별기 결과에는 "개발용 결과" 경고가 붙는다. fixture 상품: `1000000001`(README 5.4 고정 예제), `1000000002`(표본 부족),
 `1000000003`(차단 모의), `1000000004`(리뷰 없음), `1000000005`(셀렉터 깨짐 모의), 단축 링크 `https://link.coupang.com/a/demo01`, 검색어 `텀블러`.
+
+## Heroku 배포
+
+도메인 없이 Heroku에 배포한다(백엔드 container 앱 + 홈페이지 Node 앱). 단계별 명령·주의점: [`docs/deploy-heroku.md`](../docs/deploy-heroku.md).
+루트의 `heroku.yml`, `Dockerfile.backend`, `Dockerfile.scraper`가 배포 설정이다.
 
 ## 운영 구성 (Docker Compose)
 
@@ -82,12 +87,13 @@ uvicorn --factory realstar_api.main:create_app --port 8000
 | `python -m realstar smoke --url <링크>` | 일일 셀렉터 스모크 테스트 (실패 시 종료 코드 1) |
 | `python -m realstar export-training --targets f.txt` | 학습용 과거 리뷰 → `model/data/raw/coupang/` (MODEL_DEV 4.12.1) |
 | `python -m realstar export-demo --analysis-id … --key …` | 실제 분석 결과 → 웹 발표 모드 데이터 |
+| `python -m realstar prepare-demo --products ../docs/demo-products.txt` | 시연 상품 4개 실제 분석 → 발표 모드 데이터 일괄 교체 |
 | `python -m realstar cooldown [--clear]` | 차단 쿨다운 확인/해제 |
 
 ## 테스트
 
 ```bash
-cd service && pytest --cov=realstar          # 116개, 실제 쿠팡 접속 없음 (커버리지 88%)
+cd service && pytest --cov=realstar          # 127개, 실제 쿠팡 접속 없음 (커버리지 88%)
 pytest -m contract                            # 모델 계약 테스트 (realstar_model 설치 시)
 cd apps/web && npm run lint && npm run typecheck && npm run test:e2e   # Playwright 15개
 ```

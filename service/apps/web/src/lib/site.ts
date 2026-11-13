@@ -2,12 +2,12 @@
  * 사이트 전역 설정. 오너 답변이 필요한 값은 TODO(owner)로 표시했다(README 14.2, docs/decisions.md).
  */
 export const site = {
-  // TODO(owner): Q1 서비스 이름과 한 줄 소개 — 현재 추천 기본값 사용
+  // TODO(owner): Q1 서비스 이름과 한 줄 소개 — 팀 논의 후 결정(현재 추천 기본값). 바꾸면 npm run og로 OG 이미지도 다시 만든다.
   name: "리얼별점",
   tagline: "AI가 쓴 리뷰를 걸러낸 진짜 별점",
   description:
     "쿠팡 상품 리뷰에서 AI 작성으로 추정되는 리뷰를 골라내고, 사람이 쓴 리뷰만으로 별점을 다시 계산해 보여드려요.",
-  // TODO(owner): Q6 배포 주소 — 환경 변수 NEXT_PUBLIC_SITE_URL로 지정
+  // Q6: 도메인 없이 Heroku 배포 → NEXT_PUBLIC_SITE_URL에 홈페이지 앱의 herokuapp.com 주소 (docs/deploy-heroku.md)
   url: process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
   // TODO(owner): Q7 문의 이메일 — 기본값(노출 안 함). 값을 넣으면 푸터에 표시된다.
   contactEmail: null as string | null,

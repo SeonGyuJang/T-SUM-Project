@@ -4,7 +4,7 @@ import { site } from "@/lib/site";
 
 export const metadata: Metadata = { title: "이용약관", description: `${site.name} 이용약관` };
 
-// TODO(owner): Q10 이용약관 확정 (현재 에이전트 초안, 법률 자문 아님). 시행일·운영자 정보 기입 필요.
+// Q10(2026-11-13): 실서비스 전환 시 검토 예정. 현재 에이전트 초안(법률 자문 아님). 확정 시 시행일·운영자 정보 기입.
 export default function TermsPage() {
   return (
     <article className="container-page section">

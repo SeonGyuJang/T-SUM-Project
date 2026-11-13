@@ -26,7 +26,7 @@ from realstar import __version__
 from realstar.config import Settings, get_settings
 from realstar.db.session import init_db
 from realstar.detection import preprocess
-from realstar.detection.backends import make_backend
+from realstar.detection.backends import light_info
 from realstar.errors import InvalidInputError, RealstarError
 from realstar.pipeline.service import Dispatcher, RealstarService, make_dispatcher
 from realstar.state.store import Cooldown, get_state_store
@@ -116,6 +116,7 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
     async def analysis_events(analysis_id: str, request: Request) -> StreamingResponse:
         async def gen() -> AsyncIterator[str]:
             last = None
+            idle = 0
             for _ in range(3600):
                 if await request.is_disconnected():
                     return
@@ -127,6 +128,12 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
                 if payload != last:
                     yield f"event: progress\ndata: {payload}\n\n"
                     last = payload
+                    idle = 0
+                else:
+                    idle += 1
+                    if idle >= 15:  # 프록시 유휴 연결 종료 방지(Heroku: 55초 동안 데이터가 없으면 끊김)
+                        yield ": keep-alive\n\n"
+                        idle = 0
                 if view["status"] in ("done", "failed", "blocked"):
                     yield f"event: end\ndata: {json.dumps({'status': view['status']})}\n\n"
                     return
@@ -138,10 +145,10 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
     async def health() -> dict[str, Any]:
         def _collect() -> dict[str, Any]:
             cd = Cooldown(get_state_store(settings), settings.scraper_block_cooldown_min).status()
-            det = make_backend(
+            det = light_info(
                 settings.detector_mode, detector_url=settings.detector_url, artifact_path=settings.model_artifact_path,
                 min_chars=settings.min_chars,
-            ).info()
+            )
             from realstar.vision.ocr import get_ocr_engine
 
             ocr = get_ocr_engine(settings.ocr_engine) if settings.ocr_engine != "none" else None

@@ -117,7 +117,8 @@ class RedisStateStore:
     def __init__(self, redis_url: str) -> None:
         import redis
 
-        self.r = redis.Redis.from_url(redis_url, decode_responses=True)
+        ssl_kwargs = {"ssl_cert_reqs": None} if redis_url.startswith("rediss://") else {}
+        self.r = redis.Redis.from_url(redis_url, decode_responses=True, **ssl_kwargs)
 
     def get(self, key: str) -> str | None:
         v = self.r.get(key)

@@ -49,6 +49,9 @@ def default_driver_factory(settings: Settings) -> DriverLike:
         options.add_argument("--headless=new")
     options.add_argument("--window-size=1366,900")
     options.add_argument("--lang=ko-KR")
+    if settings.scraper_chrome_container:
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
     if settings.scraper_chrome_binary:
         options.binary_location = settings.scraper_chrome_binary
     service = Service(executable_path=settings.scraper_chromedriver_path) if settings.scraper_chromedriver_path else Service()

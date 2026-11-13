@@ -8,7 +8,7 @@
     "dev:demo": "NEXT_PUBLIC_DEMO_MODE=true next dev -p 3000",
     "build": "next build",
     "build:demo": "NEXT_PUBLIC_DEMO_MODE=true next build",
-    "start": "next start -p 3000",
+    "start": "next start -p ${PORT:-3000}",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
@@ -51,5 +51,8 @@
     "workerDirectory": [
       "public"
     ]
+  },
+  "engines": {
+    "node": "22.x"
   }
 }

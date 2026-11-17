@@ -177,6 +177,18 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
 
         return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    @app.get("/", include_in_schema=False)
+    async def root() -> dict[str, Any]:
+        # 이 서버는 API다. 홈페이지는 Next.js(service/apps/web, `npm run dev`)가 따로 띄운다.
+        web = settings.cors_origin_list[0] if settings.cors_origin_list else "http://localhost:3000"
+        return {
+            "service": "리얼별점 API",
+            "message": f"여기는 API 서버예요. 홈페이지는 service/apps/web 에서 `npm run dev`를 실행한 뒤 {web} 으로 접속하세요.",
+            "homepage": web,
+            "health": "/api/health",
+            "docs": "/docs",
+        }
+
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         def _collect() -> dict[str, Any]:

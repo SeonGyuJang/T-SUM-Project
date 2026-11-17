@@ -20,6 +20,14 @@
   # (2) 수집: urls.txt 에 상품 URL을 한 줄에 하나씩
   python coupang_reviews.py collect urls.txt
   python coupang_reviews.py collect urls.txt --per-rating 50      # 별점당 50개
+  python coupang_reviews.py collect urls.txt --real-chrome        # 설치된 Chrome 사용 (권장)
+
+차단 대응
+  - 요청 간격을 넉넉히 두고, 상품 3개마다 2~4분 쉽니다.
+  - 쿠팡이 막으면(403/429) 브라우저를 닫고 5분 → 15분 → 30분 쉬었다가 이어서 수집합니다.
+    세 번 쉬어도 막히면 그날은 멈춥니다. 몇 시간 뒤 다시 실행하세요.
+  - 별점 하나를 끝낼 때마다 output/products/<상품ID>.partial.json 에 저장하므로,
+    차단이나 Ctrl+C로 멈춰도 다시 실행하면 끝난 별점은 건너뛰고 이어서 합니다.
 
 결과
   output/products/<상품ID>.json   상품별 결과 (이미 있으면 다음 실행 때 건너뜀)
@@ -32,6 +40,7 @@ import argparse
 import json
 import random
 import re
+import shutil
 import sys
 import time
 from collections import deque
@@ -50,10 +59,18 @@ SORT_BY = "ORDER_SCORE_ASC"    # discover에서 확인된 기본 정렬값
 PER_RATING_TARGET = 100        # 별점당 최대 수집 개수
 EXTRA_PAGES = 5                # 목표 페이지 수 외에 더 넘겨 볼 여유 페이지
 PAGE_RETRIES = 4               # 한 페이지가 빈 응답/오류일 때 시도 횟수
-RETRY_BACKOFF = (5, 15, 30, 60)  # 재시도 전 대기(초): 점점 길게
+RETRY_BACKOFF = (5, 15, 30)    # 재시도 전 대기(초): 점점 길게
 
-API_DELAY_RANGE = (1.5, 3.5)   # API 호출 사이 대기(초)
-PRODUCT_DELAY_RANGE = (5.0, 10.0)  # 상품 사이 대기(초)
+# 속도 설정: 차단은 대부분 "짧은 시간에 너무 많은 요청" 때문입니다. 줄이지 마세요.
+API_DELAY_RANGE = (2.5, 5.0)       # API 호출 사이 대기(초)
+PRODUCT_DELAY_RANGE = (20.0, 40.0)  # 상품 사이 대기(초)
+LONG_BREAK_EVERY = 3                # 상품 N개마다
+LONG_BREAK_RANGE = (120, 240)       # 길게 쉬기(초)
+
+# 차단 대응
+BLOCK_STATUSES = {401, 403, 407, 429, 444, 503}
+SOFT_BLOCK_WAIT = 30                # 차단 응답을 처음 받았을 때 잠깐 쉬는 시간(초)
+BLOCK_COOLDOWNS = (300, 900, 1800)  # 차단이 계속되면 브라우저를 닫고 쉬는 시간(초): 5분 → 15분 → 30분
 
 OUTPUT_DIR = Path("output")
 PRODUCT_DIR = OUTPUT_DIR / "products"
@@ -326,14 +343,33 @@ def review_api_url(pid: str, page: int, rating="") -> str:
 # ──────────────────────────────────────────────────────────────
 # 브라우저 페이지 안에서 API 호출
 # ──────────────────────────────────────────────────────────────
+class Blocked(Exception):
+    """쿠팡이 요청을 막았을 때 (403/429 같은 상태코드, 또는 차단 페이지)."""
+
+
+class BrowserClosed(Exception):
+    """브라우저 탭/창이 닫혀 더 진행할 수 없을 때."""
+
+
+def is_closed_error(e) -> bool:
+    msg = str(e).lower()
+    return "has been closed" in msg or "target closed" in msg or "connection closed" in msg
+
+
 def api_get(page, url):
     res = page.evaluate(FETCH_JS, url)
-    if res["status"] != 200:
-        raise RuntimeError(f"API HTTP {res['status']} ({url})")
+    status = res["status"]
+    if status in BLOCK_STATUSES:
+        raise Blocked(f"API HTTP {status}")
+    if status != 200:
+        raise RuntimeError(f"API HTTP {status}")
     try:
         return json.loads(res["text"])
     except json.JSONDecodeError:
-        raise RuntimeError(f"JSON이 아닌 응답(차단 페이지일 수 있음): {res['text'][:120]!r}")
+        text = res["text"][:300]
+        if re.search(r"(?i)access denied|<html|captcha", text):
+            raise Blocked("차단 페이지(HTML) 응답")
+        raise RuntimeError(f"JSON이 아닌 응답: {text[:120]!r}")
 
 
 def pause(page, rng):
@@ -347,32 +383,6 @@ def warm_up(page):
         page.wait_for_timeout(random.randint(400, 900))
 
 
-def collect_summary(page, pid, log=print):
-    """전체 리뷰 수 / 별점별 개수 / 평균 별점. 빈 응답이면 재시도."""
-    data, info = None, None
-    for attempt in range(1, PAGE_RETRIES + 1):
-        try:
-            data = api_get(page, review_api_url(pid, 1))
-            reviews = find_review_list(data)
-            counts = find_rating_counts(data)
-            total = find_number(data, TOTAL_KEYS, skip_lists=reviews)
-            avg = find_number(data, AVERAGE_KEYS, skip_lists=reviews)
-            info = {"total_reviews": int(total) if total is not None else None,
-                    "average_rating": avg, "rating_counts": counts}
-            if counts and sum(counts.values()) > 0:
-                return data, info
-            reason = "별점별 개수 없음"
-        except Exception as e:
-            reason = str(e)[:80]
-        save_debug(pid, "summary", 1, attempt, data if data is not None else reason)
-        wait = RETRY_BACKOFF[min(attempt - 1, len(RETRY_BACKOFF) - 1)]
-        log(f"      ↻ 요약 정보 {reason} → {wait}초 후 재시도 ({attempt}/{PAGE_RETRIES})")
-        page.wait_for_timeout(wait * 1000)
-    if info is None:
-        raise RuntimeError("요약 정보를 가져오지 못함 (output/raw/debug/ 확인)")
-    return data, info  # 별점별 개수는 못 찾았지만 나머지로 진행 (필터 응답 개수로 보완)
-
-
 def save_debug(pid, rating, page_no, attempt, data):
     """이상한 응답을 output/raw/debug/ 에 저장 (원인 확인용)."""
     d = RAW_DIR / "debug"
@@ -382,30 +392,72 @@ def save_debug(pid, rating, page_no, attempt, data):
         encoding="utf-8")
 
 
-def fetch_review_page(page, pid, rating, page_no, log=print):
-    """리뷰 한 페이지를 가져온다. 빈 응답·오류면 대기 시간을 늘려 가며 재시도.
-    끝까지 실패하면 (None, None) 반환."""
+def call_with_retry(page, label, fn, log=print, debug_key=None):
+    """fn()을 호출하고, 빈 응답이면 간격을 늘려 재시도한다.
+    차단(Blocked)이면 한 번만 잠깐 쉬었다 다시 해 보고, 그래도 막히면 Blocked를 위로 올린다.
+    끝까지 빈 응답이면 None."""
+    blocked_once = False
     for attempt in range(1, PAGE_RETRIES + 1):
         try:
-            data = api_get(page, review_api_url(pid, page_no, rating=str(rating)))
-            items = find_review_list(data)
-            if items:
-                return data, items
-            save_debug(pid, rating, page_no, attempt, data)
-            reason = "빈 목록"
+            result = fn()
+            if result is not None:
+                return result
+            reason = "빈 응답"
+        except Blocked as e:
+            if debug_key:
+                save_debug(*debug_key, attempt, str(e))
+            if blocked_once:
+                raise
+            blocked_once = True
+            log(f"      ⏸ {label} {e} → {SOFT_BLOCK_WAIT}초 쉬고 한 번 더 시도")
+            page.wait_for_timeout(SOFT_BLOCK_WAIT * 1000)
+            continue
         except Exception as e:
-            save_debug(pid, rating, page_no, attempt, str(e))
+            if is_closed_error(e):
+                raise BrowserClosed(str(e)[:120]) from e
             reason = str(e)[:80]
+        if debug_key:
+            save_debug(*debug_key, attempt, reason)
+        if attempt == PAGE_RETRIES:
+            break
         wait = RETRY_BACKOFF[min(attempt - 1, len(RETRY_BACKOFF) - 1)]
-        log(f"      ↻ {rating}점 {page_no}페이지 {reason} → {wait}초 후 재시도 ({attempt}/{PAGE_RETRIES})")
+        log(f"      ↻ {label} {reason} → {wait}초 후 재시도 ({attempt}/{PAGE_RETRIES - 1})")
         page.wait_for_timeout(wait * 1000)
-        if attempt == PAGE_RETRIES - 1:  # 마지막 시도 전에는 페이지를 새로 고쳐 쿠키 갱신
-            try:
-                page.reload(wait_until="domcontentloaded")
-                warm_up(page)
-            except Exception:
-                pass
-    return None, None
+    return None
+
+
+def collect_summary(page, pid, log=print):
+    """전체 리뷰 수 / 별점별 개수 / 평균 별점."""
+    holder = {}
+
+    def once():
+        data = api_get(page, review_api_url(pid, 1))
+        reviews = find_review_list(data)
+        counts = find_rating_counts(data)
+        total = find_number(data, TOTAL_KEYS, skip_lists=reviews)
+        avg = find_number(data, AVERAGE_KEYS, skip_lists=reviews)
+        holder["data"] = data
+        holder["info"] = {"total_reviews": int(total) if total is not None else None,
+                          "average_rating": avg, "rating_counts": counts}
+        return holder["info"] if counts and sum(counts.values()) > 0 else None
+
+    info = call_with_retry(page, "요약 정보", once, log, debug_key=(pid, "summary", 1))
+    if info is None and "info" not in holder:
+        raise RuntimeError("요약 정보를 가져오지 못함 (output/raw/debug/ 확인)")
+    # 별점별 개수를 못 찾았어도 나머지로 진행 (별점 필터 응답 개수로 보완)
+    return holder.get("data"), info or holder["info"]
+
+
+def fetch_review_page(page, pid, rating, page_no, log=print):
+    """리뷰 한 페이지. 빈 응답이면 재시도, 끝까지 실패하면 (None, None). 차단이면 Blocked."""
+    def once():
+        data = api_get(page, review_api_url(pid, page_no, rating=str(rating)))
+        items = find_review_list(data)
+        return (data, items) if items else None
+
+    result = call_with_retry(page, f"{rating}점 {page_no}페이지", once, log,
+                             debug_key=(pid, rating, page_no))
+    return result if result else (None, None)
 
 
 def collect_rating(page, pid, rating, target, log=print):
@@ -417,13 +469,31 @@ def collect_rating(page, pid, rating, target, log=print):
     no_new_streak = failed_pages = 0
     max_pages = -(-target // PAGE_SIZE) + EXTRA_PAGES  # 올림 + 여유
     page_no = 0
+
+    def absorb(batch):
+        nonlocal mismatched
+        added = 0
+        for raw in batch:
+            if len(got) >= target:
+                break
+            r = parse_review(raw)
+            key = r["review_id"] or (r["date"], r["content"][:80])
+            if key in seen:
+                continue
+            seen.add(key)
+            if r["rating"] is not None and r["rating"] != rating:
+                mismatched += 1
+            got.append(r)
+            added += 1
+        return added
+
     while len(got) < target and page_no < max_pages:
         page_no += 1
         data, items = fetch_review_page(page, pid, rating, page_no, log)
         if items is None:
             failed_pages += 1
             log(f"      ✗ {rating}점 {page_no}페이지를 끝내 못 가져옴 (output/raw/debug/ 확인)")
-            if failed_pages >= 2:  # 두 페이지째 실패면 차단된 것으로 보고 중단
+            if failed_pages >= 2:
                 break
             continue  # 한 페이지는 건너뛰고 다음 페이지에서 채워 봄
         if filtered_total is None:
@@ -432,22 +502,6 @@ def collect_rating(page, pid, rating, target, log=print):
             if filtered_total is not None:  # 필터 응답이 알려 준 실제 개수로 목표 보정
                 target = min(target, filtered_total)
                 max_pages = -(-target // PAGE_SIZE) + EXTRA_PAGES
-        def absorb(batch):
-            nonlocal mismatched
-            added = 0
-            for raw in batch:
-                if len(got) >= target:
-                    break
-                r = parse_review(raw)
-                key = r["review_id"] or (r["date"], r["content"][:80])
-                if key in seen:
-                    continue
-                seen.add(key)
-                if r["rating"] is not None and r["rating"] != rating:
-                    mismatched += 1
-                got.append(r)
-                added += 1
-            return added
 
         new = absorb(items)
         # 10개보다 적게 왔는데 아직 목표에 못 미치면, 같은 페이지를 다시 요청해 빠진 리뷰 보충
@@ -473,58 +527,134 @@ def collect_rating(page, pid, rating, target, log=print):
     return got, filtered_total, target
 
 
+# ── 진행 상황 저장 (차단·중단 후 이어서 수집) ─────────────────────
+def partial_path(pid):
+    return PRODUCT_DIR / f"{pid}.partial.json"
+
+
+def load_partial(pid):
+    p = partial_path(pid)
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        summ = d.get("summary")
+        if summ and summ.get("rating_counts"):
+            summ["rating_counts"] = {int(k): v for k, v in summ["rating_counts"].items()}
+        return {
+            "summary": summ,
+            "og": d.get("og", ""),
+            "reviews": {int(k): v for k, v in d.get("reviews", {}).items()},
+            "filtered_totals": {int(k): v for k, v in d.get("filtered_totals", {}).items()},
+            "shortfalls": {int(k): tuple(v) for k, v in d.get("shortfalls", {}).items()},
+        }
+    except Exception:
+        return None
+
+
+def save_partial(pid, state):
+    PRODUCT_DIR.mkdir(parents=True, exist_ok=True)
+    summ = dict(state["summary"]) if state.get("summary") else None
+    if summ and summ.get("rating_counts"):
+        summ["rating_counts"] = {str(k): v for k, v in summ["rating_counts"].items()}
+    data = {
+        "summary": summ,
+        "og": state.get("og", ""),
+        "reviews": {str(k): v for k, v in state["reviews"].items()},
+        "filtered_totals": {str(k): v for k, v in state["filtered_totals"].items()},
+        "shortfalls": {str(k): list(v) for k, v in state["shortfalls"].items()},
+    }
+    tmp = partial_path(pid).with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(partial_path(pid))  # 쓰는 도중 중단돼도 파일이 깨지지 않게
+
+
+def fallback_name(state):
+    """상품 페이지가 막혀 og:title을 못 읽었을 때: 리뷰의 구매 옵션 중 가장 흔한 값."""
+    names = [r["purchased_item"] for rs in state["reviews"].values() for r in rs if r["purchased_item"]]
+    return max(set(names), key=names.count) if names else ""
+
+
 def collect_product(session, url, per_rating, log=print):
     pid = product_id_from_url(url)
-    state = {"error": None}
+    saved = load_partial(pid) or {}
+    state = {
+        "error": None,
+        "summary": saved.get("summary"),
+        "og": saved.get("og", ""),
+        "reviews": saved.get("reviews", {}),
+        "filtered_totals": saved.get("filtered_totals", {}),
+        "shortfalls": saved.get("shortfalls", {}),
+    }
+    done = [r for r in state["reviews"] if r not in state["shortfalls"]]
+    if done:
+        log(f"    ↪ 이전에 끝낸 별점 이어서 건너뜀: {', '.join(f'{r}점' for r in sorted(done, reverse=True))}")
 
     def action(page):
         # page_action 안의 예외는 Scrapling이 로그만 남기고 삼키므로 직접 보관
         try:
+            if not state["og"]:
+                try:
+                    state["og"] = page.locator('meta[property="og:title"]').first.get_attribute(
+                        "content", timeout=3000) or ""
+                except Exception:
+                    pass
             warm_up(page)
-            _, summary = collect_summary(page, pid, log)
-            state["summary"] = summary
-            counts = summary["rating_counts"] or {}
-            state["reviews"], state["filtered_totals"] = {}, {}
+            if not state["summary"]:
+                _, state["summary"] = collect_summary(page, pid, log)
+                save_partial(pid, state)
+            counts = state["summary"]["rating_counts"] or {}
             for rating in (5, 4, 3, 2, 1):
-                pause(page, API_DELAY_RANGE)
+                if rating in state["reviews"] and rating not in state["shortfalls"]:
+                    continue  # 이미 끝난 별점
+                state["shortfalls"].pop(rating, None)
                 known = counts.get(rating)
                 if known == 0:
                     state["reviews"][rating], state["filtered_totals"][rating] = [], 0
+                    save_partial(pid, state)
                     continue
+                pause(page, API_DELAY_RANGE)
                 target = min(per_rating, known) if known is not None else per_rating
                 reviews, ftotal, final_target = collect_rating(page, pid, rating, target, log)
                 state["reviews"][rating] = reviews
                 state["filtered_totals"][rating] = ftotal
+                if len(reviews) < final_target:
+                    state["shortfalls"][rating] = (len(reviews), final_target)
+                save_partial(pid, state)  # 별점 하나 끝날 때마다 저장
                 total_txt = known if known is not None else ftotal
                 mark = "✓" if len(reviews) >= final_target else "⚠ 목표 미달"
                 log(f"    {rating}점: {len(reviews)}/{final_target}개 수집 {mark}"
                     + (f" (전체 {total_txt}개)" if total_txt is not None else ""))
-                if len(reviews) < final_target:
-                    state.setdefault("shortfalls", {})[rating] = (len(reviews), final_target)
         except Exception as e:
             state["error"] = e
         return page
 
-    resp = session.fetch(url, page_action=action)
-    if resp.status != 200:
-        raise RuntimeError(f"상품 페이지 HTTP {resp.status} (차단되었을 수 있음)")
+    try:
+        resp = session.fetch(url, page_action=action)
+    except Exception as e:
+        if is_closed_error(e):
+            raise BrowserClosed(str(e)[:120]) from e
+        raise
     if state["error"]:
         raise state["error"]
+    if not state["summary"]:
+        if resp.status in BLOCK_STATUSES:
+            raise Blocked(f"상품 페이지 HTTP {resp.status}")
+        raise RuntimeError(f"리뷰 정보를 못 가져옴 (상품 페이지 HTTP {resp.status})")
+    if resp.status != 200:
+        # 리뷰 API는 정상이었으므로 결과를 버리지 않는다 (이전 버전에서 이것 때문에 실패 처리됨)
+        log(f"    (참고) 상품 페이지 응답은 {resp.status}였지만 리뷰는 정상 수집되어 저장합니다")
 
-    og = resp.css('meta[property="og:title"]::attr(content)').get() or ""
     summary = state["summary"]
-
-    # 요약 응답에서 별점별 개수를 못 찾았으면, 별점 필터 응답의 전체 개수로 채움
-    if not summary["rating_counts"]:
+    if not summary["rating_counts"]:  # 요약 응답에 별점별 개수가 없으면 필터 응답 개수로 채움
         ft = state["filtered_totals"]
         if all(ft.get(r) is not None for r in range(1, 6)):
             summary["rating_counts"] = {r: ft[r] for r in range(5, 0, -1)}
-            summary["rating_counts_source"] = "별점 필터 응답의 전체 개수"
     if summary["total_reviews"] is None and summary["rating_counts"]:
         summary["total_reviews"] = sum(summary["rating_counts"].values())
-        summary["total_reviews_source"] = "별점별 개수 합계"
 
-    name = clean_product_name(og)
+    og = state["og"] or resp.css('meta[property="og:title"]::attr(content)').get() or ""
+    name = clean_product_name(og) or fallback_name(state)
     total, avg = summary["total_reviews"], summary["average_rating"]
     counts = summary["rating_counts"] or {}
     reviews = [to_output_review(r, name, url, total, avg)
@@ -538,24 +668,60 @@ def collect_product(session, url, per_rating, log=print):
             "전체_리뷰_개수": total,
             "별점별_리뷰_개수": {f"{r}점": counts.get(r) for r in (5, 4, 3, 2, 1)},
             "수집된_리뷰_개수": {f"{r}점": len(state["reviews"].get(r, [])) for r in (5, 4, 3, 2, 1)},
-            "수집_완료": not state.get("shortfalls"),
-            "목표_미달": {f"{r}점": f"{got}/{tgt}" for r, (got, tgt) in state.get("shortfalls", {}).items()},
+            "수집_완료": not state["shortfalls"],
+            "목표_미달": {f"{r}점": f"{g}/{t}" for r, (g, t) in state["shortfalls"].items()},
             "수집_시각": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
         },
         "리뷰": reviews,
     }
 
 
-def open_session(headless=False, **extra):
+def open_session(headless=False, real_chrome=False, **extra):
     return StealthySession(
         headless=headless,
+        real_chrome=real_chrome,   # 설치된 실제 Chrome 사용 (지문이 더 자연스러움)
         user_data_dir=str(PROFILE_DIR),
         locale="ko-KR",
         timezone_id="Asia/Seoul",
         timeout=60000,
-        retries=2,
+        retries=1,                 # 재시도는 이 스크립트가 직접 관리 (Scrapling 자동 재시도는
+                                   # 수집 전체를 처음부터 다시 돌려서 꺼 둠)
         **extra,
     )
+
+
+class BrowserRunner:
+    """브라우저 세션을 열고, 차단되면 닫았다가 다시 여는 관리자."""
+
+    def __init__(self, headless=False, real_chrome=False):
+        self.headless, self.real_chrome = headless, real_chrome
+        self.session = None
+
+    def start(self, fresh_profile=False):
+        self.close()
+        if fresh_profile and PROFILE_DIR.exists():
+            # 이 스크립트가 만든 브라우저 프로필 폴더만 지움 (차단 표시가 남은 쿠키 제거)
+            shutil.rmtree(PROFILE_DIR, ignore_errors=True)
+        self.session = open_session(headless=self.headless, real_chrome=self.real_chrome)
+        self.session.start()
+        return self.session
+
+    def close(self):
+        if self.session is not None:
+            try:
+                self.session.close()
+            except Exception:
+                pass  # 이미 닫힌 브라우저를 닫다가 나는 오류는 무시
+            self.session = None
+
+
+def cooldown(seconds, reason):
+    end = time.time() + seconds
+    print(f"  ⏸ {reason} → {seconds // 60}분 {seconds % 60}초 쉬었다가 이어서 합니다 (Ctrl+C로 중단 가능)")
+    while (left := int(end - time.time())) > 0:
+        print(f"\r    남은 시간 {left // 60:02d}:{left % 60:02d} ", end="", flush=True)
+        time.sleep(min(5, left))
+    print("\r    다시 시작합니다.          ")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -638,7 +804,7 @@ def inspect(url):
               f"파일 위쪽 *_KEYS 목록 맨 앞에 추가하세요.")
 
 
-def collect(url_file, per_rating, headless):
+def collect(url_file, per_rating, headless, real_chrome=False):
     PRODUCT_DIR.mkdir(parents=True, exist_ok=True)
     urls, seen_ids = [], set()
     for line_no, line in enumerate(Path(url_file).read_text(encoding="utf-8-sig").splitlines(), 1):
@@ -653,6 +819,7 @@ def collect(url_file, per_rating, headless):
             continue  # 같은 상품의 다른 옵션 링크는 한 번만
         seen_ids.add(m.group(1))
         urls.append(u)
+
     def is_done(u):
         path = PRODUCT_DIR / f"{product_id_from_url(u)}.json"
         if not path.exists():
@@ -665,28 +832,80 @@ def collect(url_file, per_rating, headless):
     todo = [u for u in urls if not is_done(u)]
     print(f"전체 {len(urls)}개 / 완료 {len(urls) - len(todo)}개 / 남은 {len(todo)}개")
 
-    with open_session(headless=headless) as session:
-        for n, url in enumerate(todo, start=1):
-            print(f"[{n}/{len(todo)}] {url}")
+    runner = BrowserRunner(headless=headless, real_chrome=real_chrome)
+    blocks_in_a_row = closed_retries = 0
+    finished_since_break = 0
+    try:
+        runner.start()
+        n = 0
+        while n < len(todo):
+            url = todo[n]
+            print(f"[{n + 1}/{len(todo)}] {url}")
             try:
-                result = collect_product(session, url, per_rating)
-                info = result["상품정보"]
-                path = PRODUCT_DIR / f"{info['상품ID']}.json"
-                path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-                status = "✓" if info["수집_완료"] else f"⚠ 일부 미달 {info['목표_미달']} (다음 실행 때 다시 수집)"
-                print(f"  {status} {info['상품명'][:40]} | 전체 {info['전체_리뷰_개수']}개 "
-                      f"| 별점별 {info['별점별_리뷰_개수']} | 수집 {len(result['리뷰'])}개")
+                result = collect_product(runner.session, url, per_rating)
+            except Blocked as e:
+                blocks_in_a_row += 1
+                if blocks_in_a_row > len(BLOCK_COOLDOWNS):
+                    print(f"  ✗ {blocks_in_a_row - 1}번 쉬어도 계속 막힙니다 ({e}). 오늘은 여기서 멈춥니다.")
+                    print("    진행 상황은 저장되어 있으니, 몇 시간 뒤 같은 명령을 다시 실행하면 이어서 수집합니다.")
+                    break
+                runner.close()
+                cooldown(BLOCK_COOLDOWNS[blocks_in_a_row - 1], f"쿠팡이 요청을 막았습니다 ({e})")
+                # 두 번째 차단부터는 쿠키를 새로 받기 위해 브라우저 프로필을 초기화
+                runner.start(fresh_profile=blocks_in_a_row >= 2)
+                continue  # 같은 상품을 저장된 지점부터 다시
+            except BrowserClosed as e:
+                closed_retries += 1
+                if closed_retries <= 2:
+                    print(f"  ↻ 브라우저가 닫혔습니다. 새로 띄워서 저장된 지점부터 다시 합니다 ({closed_retries}/2)")
+                    runner.start()
+                    continue
+                e = f"브라우저가 계속 닫힘: {e}"
+                print(f"  ✗ 실패: {e}")
+                with (OUTPUT_DIR / "failed.txt").open("a", encoding="utf-8") as f:
+                    f.write(f"{url}\t{e}\n")
+                runner.start()
+                closed_retries = 0
+                n += 1
+                continue
             except Exception as e:
                 print(f"  ✗ 실패: {e}")
                 with (OUTPUT_DIR / "failed.txt").open("a", encoding="utf-8") as f:
                     f.write(f"{url}\t{e}\n")
-            if n < len(todo):
-                time.sleep(random.uniform(*PRODUCT_DELAY_RANGE))
+                n += 1
+                continue
 
-    merged = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(PRODUCT_DIR.glob("*.json"))]
-    (OUTPUT_DIR / "all_products.json").write_text(
-        json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"완료 → {PRODUCT_DIR}/, {OUTPUT_DIR/'all_products.json'}")
+            blocks_in_a_row = closed_retries = 0
+            info = result["상품정보"]
+            path = PRODUCT_DIR / f"{info['상품ID']}.json"
+            path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            if info["수집_완료"]:
+                partial_path(info["상품ID"]).unlink(missing_ok=True)
+                status = "✓"
+            else:
+                status = f"⚠ 일부 미달 {info['목표_미달']} (다음 실행 때 그 별점만 다시 수집)"
+            print(f"  {status} {info['상품명'][:40]} | 전체 {info['전체_리뷰_개수']}개 "
+                  f"| 별점별 {info['별점별_리뷰_개수']} | 수집 {len(result['리뷰'])}개")
+
+            n += 1
+            finished_since_break += 1
+            if n < len(todo):
+                if finished_since_break >= LONG_BREAK_EVERY:
+                    finished_since_break = 0
+                    cooldown(random.randint(*LONG_BREAK_RANGE), f"상품 {LONG_BREAK_EVERY}개마다 쉬는 시간")
+                else:
+                    wait = random.uniform(*PRODUCT_DELAY_RANGE)
+                    print(f"  … 다음 상품까지 {wait:.0f}초 대기")
+                    time.sleep(wait)
+    except KeyboardInterrupt:
+        print("\n중단했습니다. 지금까지 진행한 내용은 저장되어 있고, 다시 실행하면 이어서 수집합니다.")
+    finally:
+        runner.close()
+        merged = [json.loads(p.read_text(encoding="utf-8"))
+                  for p in sorted(PRODUCT_DIR.glob("*.json")) if not p.name.endswith(".partial.json")]
+        (OUTPUT_DIR / "all_products.json").write_text(
+            json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"저장 위치 → {PRODUCT_DIR}/, {OUTPUT_DIR/'all_products.json'} (상품 {len(merged)}개)")
 
 
 def main():
@@ -698,6 +917,8 @@ def main():
     c.add_argument("url_file")
     c.add_argument("--per-rating", type=int, default=PER_RATING_TARGET, help="별점당 최대 개수 (기본 100)")
     c.add_argument("--headless", action="store_true", help="브라우저 창 숨기기 (차단이 늘 수 있음)")
+    c.add_argument("--real-chrome", action="store_true",
+                   help="설치된 실제 Chrome으로 실행 (차단이 줄어드는 경우가 많음, Chrome 설치 필요)")
     args = ap.parse_args()
 
     if args.cmd == "discover":
@@ -705,7 +926,7 @@ def main():
     elif args.cmd == "inspect":
         inspect(args.url)
     else:
-        collect(args.url_file, args.per_rating, args.headless)
+        collect(args.url_file, args.per_rating, args.headless, args.real_chrome)
 
 
 if __name__ == "__main__":

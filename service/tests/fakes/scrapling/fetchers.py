@@ -53,6 +53,13 @@ class FakePage:
     def reload(self, **_: Any) -> None:
         return None
 
+    def goto(self, url: str, **_: Any) -> FakeResponse:
+        self.url = url
+        return FakeResponse(url, 200)
+
+    def wait_for_selector(self, *_: Any, **__: Any) -> None:
+        return None
+
     def content(self) -> str:
         path = os.environ.get("FAKE_COUPANG_SEARCH")
         return open(path, encoding="utf-8").read() if path else "<html></html>"

@@ -129,6 +129,10 @@ class AnalysisPipeline:
                 a.progress = {**(a.progress or {}), "stage": "collect", "from_cache": True, "message": "저장된 리뷰 표본을 사용해요"}
                 return True
 
+        if not force and self._saved_file_reusable(product_id):
+            # 이미 수집해 둔 파일: 브라우저를 열지 않으므로 차단 쿨다운·수집 락과 무관하게 바로 처리한다
+            return self._collect_locked(analysis_id, product_id)
+
         st = self.cooldown.status()
         if st:
             self._fail(analysis_id, "blocked", BlockedError("cooldown"), {"cooldown_until": st["until"]})
@@ -229,6 +233,14 @@ class AnalysisPipeline:
             with session_scope(self.db) as s:
                 repo.add_scrape_log(s, product_id, started, provider.pages_loaded, outcome, detail)
             provider.close()
+
+    def _saved_file_reusable(self, product_id: str) -> bool:
+        if self.settings.review_provider != "crawler":
+            return False
+        from realstar.collectors.crawler_provider import CrawlerProvider
+
+        prov = CrawlerProvider(self.settings)
+        return prov.reusable(prov.load_saved(product_id))
 
     @staticmethod
     def _source_url(inp: Any, product_id: str) -> str | None:

@@ -18,7 +18,8 @@ def search_candidates(
     if cached is not None:
         return cached, True
     results = provider.search(query)
-    cache.put(qn, results)
+    if results:  # 빈 결과(일시 오류·화면 변경)는 캐시하지 않는다
+        cache.put(qn, results)
     return results, False
 
 
@@ -38,13 +39,17 @@ def resolve_by_name(
     try:
         raw, cached = search_candidates(query, provider, cache, settings)
     except BlockedError:
-        return ResolveResult(status="blocked", input_type=input_type, query=query)  # type: ignore[arg-type]
+        return ResolveResult(
+            status="blocked", input_type=input_type, query=query,  # type: ignore[arg-type]
+            message="쿠팡 검색 페이지가 자동 접근을 막았어요. 상품 링크를 붙여 넣으면 바로 분석할 수 있어요.",
+        )
     ranked = rank_candidates(query, raw, brand=brand)
     top = ranked[: settings.resolve_max_candidates]
     if not top:
         return ResolveResult(
             status="not_found", input_type=input_type, query=query, cached=cached,  # type: ignore[arg-type]
-            message="검색 결과가 없어요. 상품명을 조금 더 간단히 입력해 보세요.",
+            message="검색 결과가 없어요. 상품명을 조금 더 간단히 입력해 보세요."
+            + (" (지금 서버는 예시 데이터 모드예요: service/.env 의 REVIEW_PROVIDER=crawler)" if settings.review_provider == "fixture" else ""),
         )
     auto = not force_selection and decide_auto(ranked, settings.resolve_auto_top1, settings.resolve_auto_gap)
     return ResolveResult(

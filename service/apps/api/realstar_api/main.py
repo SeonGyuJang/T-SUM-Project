@@ -55,19 +55,30 @@ class CreateAnalysis(BaseModel):
 def _crawler_health(settings: Settings) -> dict[str, Any]:
     if settings.review_provider != "crawler":
         return {"enabled": False}
-    import importlib.util
+    from realstar.collectors.crawler_provider import check_crawler
 
-    script = settings.crawler_script
-    return {
-        "enabled": True,
-        "script": str(script),
-        "script_found": script.exists(),
-        "python": settings.crawler_python or "(서비스와 같은 파이썬)",
-        # 다른 파이썬을 지정했으면 그쪽 설치 여부는 여기서 알 수 없다
-        "scrapling_installed": None if settings.crawler_python else importlib.util.find_spec("scrapling") is not None,
-        "headless": settings.crawler_headless,
-        "output_dir": str(settings.crawler_output_dir),
-    }
+    return {"enabled": True, **check_crawler(settings), "headless": settings.crawler_headless,
+            "output_dir": str(settings.crawler_output_dir)}
+
+
+def _startup_banner(settings: Settings) -> None:
+    """uvicorn 터미널에 실행 모드를 크게 보여 준다(잘못된 .env를 바로 알아차리도록)."""
+    lines = ["", "=" * 72, f"  리얼별점 API  ·  REVIEW_PROVIDER={settings.review_provider}  ·  DETECTOR_MODE={settings.detector_mode}"]
+    if settings.review_provider == "crawler":
+        c = _crawler_health(settings)
+        lines.append(f"  수집기 파일   : {c['script']}  ({'있음' if c['script_found'] else '없음!'})")
+        lines.append(f"  수집기 파이썬 : {c['python']}")
+        fix = '없음! → 이 파이썬에 pip install "scrapling[fetchers]" 또는 .env의 CRAWLER_PYTHON 지정'
+        lines.append("  scrapling     : " + ("설치됨" if c["scrapling_installed"] else fix))
+        lines.append(f"  수집 결과 폴더: {settings.crawler_output_dir}")
+        if c.get("problem"):
+            lines.append(f"  ⚠ {c['problem']}")
+    else:
+        lines.append("  ⚠ 예시 데이터(fixture) 모드: 쿠팡 수집기를 실행하지 않아요.")
+        lines.append("    실제 수집을 하려면 service/.env 에 REVIEW_PROVIDER=crawler 로 두고 다시 시작하세요.")
+    lines.append(f"  홈페이지: service/apps/web 에서 `npm run dev` → {(settings.cors_origin_list or ['http://localhost:3000'])[0]}")
+    lines.append("=" * 72)
+    print("\n".join(lines), flush=True)
 
 
 def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None = None) -> FastAPI:
@@ -77,6 +88,10 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if settings.database_url.startswith("sqlite"):
             init_db(settings.database_url)  # 운영(PostgreSQL)은 alembic upgrade head
+        try:
+            await asyncio.to_thread(_startup_banner, settings)
+        except Exception:  # 안내 출력 실패로 서버가 멈추면 안 된다
+            log.exception("startup banner failed")
         yield
 
     app = FastAPI(title="리얼별점 API", version=__version__, lifespan=lifespan)

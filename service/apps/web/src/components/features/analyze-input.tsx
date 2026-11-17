@@ -1,6 +1,7 @@
 "use client";
 
 import { ImagePlus, Link2, Loader2, Search, X } from "lucide-react";
+import { BackendStatus } from "./backend-status";
 import Image from "next/image";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
@@ -76,6 +77,7 @@ export function AnalyzeInput({ size = "lg", autoFocus = false }: { size?: "lg" |
 
   return (
     <form onSubmit={onSubmit} className="w-full" aria-busy={state.busy} noValidate>
+      <BackendStatus />
       <Tabs value={tab} onValueChange={(v) => { setTab(v as Tab); setError(null); }}>
         <TabsList aria-label="입력 방법">
           <TabsTrigger value="url"><Link2 aria-hidden className="size-4" />링크</TabsTrigger>

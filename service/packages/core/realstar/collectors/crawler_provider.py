@@ -375,6 +375,32 @@ class CrawlerProvider:
         return None
 
 
+_CHECK_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def check_crawler(settings: Settings, *, refresh: bool = False) -> dict[str, Any]:
+    """수집기를 실제로 실행할 수 있는지(파일·파이썬·scrapling) 확인한다. 결과는 프로세스 안에서 캐시."""
+    python = settings.crawler_python or sys.executable
+    key = f"{python}|{settings.crawler_script}"
+    if not refresh and key in _CHECK_CACHE:
+        return _CHECK_CACHE[key]
+    script = Path(settings.crawler_script)
+    out: dict[str, Any] = {"script": str(script), "script_found": script.exists(), "python": python,
+                           "scrapling_installed": False, "problem": None}
+    try:
+        r = subprocess.run([python, "-c", "import scrapling.fetchers"], capture_output=True, text=True, timeout=60)
+        out["scrapling_installed"] = r.returncode == 0
+        if r.returncode != 0:
+            out["problem"] = (r.stderr.strip().splitlines() or ["import 실패"])[-1][:300]
+    except (OSError, subprocess.TimeoutExpired) as e:
+        out["problem"] = f"파이썬 실행 실패: {e}"
+    if not out["script_found"]:
+        out["problem"] = f"수집기 파일이 없음: {script}"
+    out["ok"] = out["script_found"] and out["scrapling_installed"]
+    _CHECK_CACHE[key] = out
+    return out
+
+
 def list_collected(settings: Settings) -> list[dict[str, Any]]:
     out_dir = Path(settings.crawler_output_dir) / "products"
     items = [s for p in out_dir.glob("*.json") if (s := summary_of_file(p))]

@@ -73,6 +73,19 @@ npm run dev
 ```
 → http://localhost:3000 접속. 끌 때는 각 터미널에서 `Ctrl + C`.
 
+### 서버를 켰을 때 꼭 볼 것
+
+uvicorn 터미널에 아래처럼 나와야 합니다. 다르면 `.env`나 브랜치를 확인하세요.
+```
+  리얼별점 API  ·  REVIEW_PROVIDER=crawler  ·  DETECTOR_MODE=none
+  수집기 파일   : …/coupang_reviews.py  (있음)
+  수집기 파이썬 : …/python
+  scrapling     : 설치됨
+```
+- `REVIEW_PROVIDER=fixture` → 예시 데이터 모드(수집기 실행 안 함). `cp .env.local.example .env` 후 재시작.
+- `scrapling : 없음` → 그 파이썬에 scrapling 설치, 또는 `.env`의 `CRAWLER_PYTHON`에 크롤러를 돌리던 파이썬 경로.
+- 코드를 받은(`git pull`) 뒤에는 uvicorn을 **반드시 재시작**하세요(자동 재시작 안 됨).
+
 ## ③ 확인할 것
 
 | # | 해 볼 것 | 정상이면 |

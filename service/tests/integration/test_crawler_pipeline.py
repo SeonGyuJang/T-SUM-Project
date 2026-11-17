@@ -136,3 +136,25 @@ def test_short_link_and_search(crawler_settings: Settings, tmp_path: Path, monke
     assert PID in ids
     top = next(c for c in s.candidates if c.product_id == PID)
     assert top.price == 12900 and top.review_count == 63 and top.rating == 4.5
+
+
+def test_cooldown_still_serves_saved_files_and_local_search(crawler_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from realstar.state.store import Cooldown, get_state_store
+
+    svc, disp, _ = make(crawler_settings, NoDetectorBackend())
+    assert run(svc, disp)["status"] == "done"
+    Cooldown(get_state_store(crawler_settings), crawler_settings.block_cooldown_min).start("test")
+    monkeypatch.setenv("FAKE_COUPANG_BLOCK", "1")
+    svc2, disp2, _ = make(crawler_settings.model_copy(update={"cache_ttl_hours": 0}), NoDetectorBackend())
+    assert run(svc2, disp2)["status"] == "done"  # 저장 파일은 쿨다운과 무관
+    s = svc2.search("가짜 비타민")  # 브라우저 없이 수집한 상품에서 찾는다
+    assert s.status == "needs_selection" and s.candidates[0].product_id == PID
+    s2 = svc2.search("없는 상품 이름")
+    assert s2.status == "blocked" and s2.message
+
+
+def test_search_blocked_has_message(crawler_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKE_COUPANG_BLOCK", "1")
+    svc, _, _ = make(crawler_settings, NoDetectorBackend())
+    r = svc.search("아무 상품")
+    assert r.status == "blocked" and "링크" in (r.message or "")

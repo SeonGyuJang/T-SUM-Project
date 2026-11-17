@@ -30,9 +30,21 @@ def run_browser_resolve(settings: Settings, kind: str, payload: dict[str, Any]) 
     """단축 링크 해석·상품명 검색. 수집 워커(또는 inline 스크래퍼 스레드)에서 실행된다."""
     state = get_state_store(settings)
     cooldown = Cooldown(state, settings.block_cooldown_min)
-    if cooldown.status():
-        return ResolveResult(status="blocked", input_type=payload.get("input_type", kind)).model_dump()  # type: ignore[arg-type]
     cache = repo.DbSearchCache(settings.database_url)
+    if cooldown.status():
+        if kind == "query" and settings.review_provider == "crawler":
+            # 차단 쉬는 중: 브라우저는 열지 않고 이미 수집한 상품에서만 찾는다
+            from realstar.collectors.crawler_provider import CrawlerProvider
+
+            local = CrawlerProvider(settings)
+            res = resolve_by_name(payload["query"], _LocalOnly(local), _NoCache(),  # type: ignore[arg-type]
+                                  settings, brand=payload.get("brand"), force_selection=True,
+                                  input_type=payload.get("input_type", "query"))
+            if res.status == "not_found":
+                res.status = "blocked"
+                res.message = COOLDOWN_SEARCH_MESSAGE
+            return res.model_dump()
+        return ResolveResult(status="blocked", input_type=payload.get("input_type", kind)).model_dump()  # type: ignore[arg-type]
     with state.lock(SCRAPE_LOCK_KEY, timeout_sec=settings.resolve_timeout_sec, lease_sec=600):
         provider = make_provider(settings, state)
         try:
@@ -52,6 +64,25 @@ def run_browser_resolve(settings: Settings, kind: str, payload: dict[str, Any]) 
             return {"_error": {"code": e.code, "message": e.user_message, "detail": e.detail}}
         finally:
             provider.close()
+
+
+COOLDOWN_SEARCH_MESSAGE = "쿠팡이 잠시 자동 접근을 막아 검색을 쉬고 있어요. 이미 수집한 상품 중에는 없어요. 잠시 후 다시 시도해 주세요."
+
+
+class _LocalOnly:
+    def __init__(self, provider: Any) -> None:
+        self.provider = provider
+
+    def search(self, query: str) -> list[Any]:
+        return self.provider.local_search(query)  # type: ignore[no-any-return]
+
+
+class _NoCache:
+    def get(self, query_norm: str, ttl_hours: int) -> None:
+        return None
+
+    def put(self, query_norm: str, candidates: list[Any]) -> None:
+        return None
 
 
 def _raise_if_error(d: dict[str, Any]) -> dict[str, Any]:

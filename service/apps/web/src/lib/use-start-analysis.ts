@@ -43,8 +43,8 @@ export function useStartAnalysis() {
         setState({ busy: false });
         return;
       }
-      if (res.status === "blocked") {
-        setError(BLOCKED_MSG);
+      if (res.status === "blocked" && res.candidates.length === 0) {
+        setError(res.message || BLOCKED_MSG);
         setState({ busy: false });
         return;
       }

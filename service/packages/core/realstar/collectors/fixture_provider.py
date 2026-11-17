@@ -43,7 +43,11 @@ class FixtureProvider:
     def _load_product(self, product_id: str) -> dict:  # type: ignore[type-arg]
         path = self.dir / "products" / f"{product_id}.json"
         if not path.exists():
-            raise InvalidInputError(f"fixture product {product_id} not found", "상품을 찾지 못했어요. 링크를 확인해 주세요.")
+            raise InvalidInputError(
+                f"fixture product {product_id} not found",
+                "지금 서버가 예시 데이터(fixture) 모드라 수집기를 실행하지 않았어요. "
+                "service/.env 에서 REVIEW_PROVIDER=crawler 로 바꾸고 API 서버를 다시 시작해 주세요.",
+            )
         return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
 
     def get_product_meta(self, product_id: str) -> ProductMeta:

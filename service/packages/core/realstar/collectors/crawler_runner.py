@@ -14,6 +14,7 @@ stdout 한 줄 = 이벤트 하나: "@@RS@@" + JSON. 그 밖의 출력은 수집�
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import json
 import re
@@ -26,6 +27,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 PREFIX = "@@RS@@"
 SEARCH_URL = "https://www.coupang.com/np/search"
+HOME_URL = "https://www.coupang.com/"
 BLOCK_HINTS = ("403", "차단", "JSON이 아닌 응답", "Access Denied", "사용권한")
 
 
@@ -255,12 +257,23 @@ def parse_search_html(html: str, limit: int) -> list[dict[str, Any]]:
     return out
 
 
+def _blocked_html(html: str) -> bool:
+    head = html[:30000]
+    return any(h in head for h in ("Access Denied", "사용권한이 없습니다", "사용권한이 제한된"))
+
+
 def cmd_search(cr: Any, args: argparse.Namespace) -> int:
+    """쿠팡 홈을 먼저 연 뒤(쿠키·리퍼러를 사람처럼) 같은 탭에서 검색 결과 페이지로 이동한다."""
     url = SEARCH_URL + "?" + urlencode({"q": args.query, "channel": "user"})
     box: dict[str, Any] = {}
 
     def action(page: Any) -> Any:
         try:
+            cr.warm_up(page)
+            resp = page.goto(url, wait_until="domcontentloaded", referer=HOME_URL)
+            box["status"] = getattr(resp, "status", 200) if resp is not None else 200
+            with contextlib.suppress(Exception):
+                page.wait_for_selector('a[href*="/vp/products/"]', timeout=15000)
             cr.warm_up(page)
             box["html"] = page.content()
         except Exception as e:
@@ -270,19 +283,29 @@ def cmd_search(cr: Any, args: argparse.Namespace) -> int:
     emit("stage", stage="browser", message="쿠팡에서 상품을 검색하고 있어요")
     try:
         with cr.open_session(headless=args.headless) as session:
-            resp = session.fetch(url, page_action=action)
+            resp = session.fetch(HOME_URL, page_action=action)
         if getattr(resp, "status", 200) != 200:
-            raise RuntimeError(f"검색 페이지 HTTP {resp.status} (차단되었을 수 있음)")
+            raise RuntimeError(f"쿠팡 홈 HTTP {resp.status} (차단되었을 수 있음)")
         if "error" in box:
             raise box["error"]
+        if box.get("status", 200) != 200:
+            raise RuntimeError(f"검색 페이지 HTTP {box['status']} (차단되었을 수 있음)")
         html = box.get("html") or ""
-        if any(h in html[:20000] for h in ("Access Denied", "사용권한이 없습니다")):
+        if _blocked_html(html):
             raise RuntimeError("검색 페이지 접근 거부 (차단되었을 수 있음)")
     except Exception as e:
         msg = str(e) or type(e).__name__
         emit("error", kind=error_kind(msg), message=msg[:500])
         return 1
-    emit("search_result", candidates=parse_search_html(html, args.limit))
+    found = parse_search_html(html, args.limit)
+    if not found:  # 화면 구조가 바뀌었는지 확인할 수 있게 마지막 검색 화면을 남긴다
+        try:
+            d = cr.RAW_DIR / "debug"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "search_last.html").write_text(html, encoding="utf-8")
+        except Exception:
+            pass
+    emit("search_result", candidates=found, html_chars=len(html))
     return 0
 
 

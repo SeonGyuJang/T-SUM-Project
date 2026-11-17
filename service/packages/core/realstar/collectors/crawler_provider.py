@@ -33,7 +33,13 @@ from realstar.collectors.base import (
     SortOrder,
 )
 from realstar.config import Settings
-from realstar.errors import BlockedError, CrawlerUnavailableError, InvalidInputError, RealstarError
+from realstar.errors import (
+    BlockedError,
+    CrawlerFailedError,
+    CrawlerUnavailableError,
+    InvalidInputError,
+    RealstarError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -181,6 +187,12 @@ def summary_of_file(path: Path) -> dict[str, Any] | None:
     }
 
 
+def _echo(msg: str) -> None:
+    """서버(uvicorn) 터미널에 수집기 출력을 보여 준다."""
+    if msg:
+        print(f"[수집기] {msg}", flush=True)
+
+
 # ── provider ─────────────────────────────────────────────────
 class CrawlerProvider:
     selectors_version = SELECTORS_VERSION
@@ -253,43 +265,69 @@ class CrawlerProvider:
         timer.daemon = True
         timer.start()
         final: dict[str, Any] | None = None
-        tail: deque[str] = deque(maxlen=20)
+        tail: deque[str] = deque(maxlen=30)
+        transcript: list[str] = [f"$ {' '.join(args)}", f"(cwd) {self.script.parent}"]
+
+        def deliver(evt: dict[str, Any]) -> None:
+            # 진행률 표시가 실패해도 수집은 계속한다
+            if not on_event:
+                return
+            try:
+                on_event(evt)
+            except Exception:
+                log.exception("progress update failed (crawl continues)")
+
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
                 line = line.rstrip("\n")
+                transcript.append(line)
                 if line.startswith(PREFIX):
                     try:
                         evt = json.loads(line[len(PREFIX):])
                     except ValueError:
                         continue
+                    if evt.get("type") in ("log", "error", "stage"):
+                        _echo(f"{evt.get('message') or ''}")
                     if "pages_loaded" in evt:
-                        self._pages = max(self._pages, int(evt["pages_loaded"] or 0))
+                        self._pages = max(self._pages, int(evt.get("pages_loaded") or 0))
                     if evt.get("type") in ("result", "error", "search_result", "resolved"):
                         final = evt
-                    elif on_event:
-                        on_event(evt)
+                    else:
+                        deliver(evt)
                 elif line.strip():
                     tail.append(line.strip())
-                    if on_event:  # 수집기·Scrapling이 직접 찍은 출력도 진행 기록으로 보여 준다
-                        on_event({"type": "log", "message": line.strip()[:300]})
+                    _echo(line.strip())  # 수집기·Scrapling이 직접 찍은 출력도 서버 터미널에 그대로 보여 준다
+                    deliver({"type": "log", "message": line.strip()[:300]})
             proc.wait()
         finally:
             timer.cancel()
             if proc.poll() is None:
                 proc.kill()
+            self._save_transcript(cmd, transcript, proc.returncode)
         if timed_out.is_set():
-            raise RealstarError(f"crawler timed out after {timeout_sec:.0f}s")
+            raise CrawlerFailedError(f"수집기가 {timeout_sec / 60:.0f}분 안에 끝나지 않아 중단했어요")
         if final is None:
-            raise RealstarError(f"crawler exited ({proc.returncode}) without result: {' / '.join(tail)[-500:]}")
+            last = " / ".join(tail)[-400:] or "출력 없음"
+            raise CrawlerFailedError(f"수집기가 결과 없이 종료됐어요(코드 {proc.returncode}): {last}")
         if final.get("type") == "error":
             msg = str(final.get("message") or "")
             if final.get("kind") == "blocked":
                 raise BlockedError("crawler", msg)
             if final.get("kind") == "setup":
                 raise CrawlerUnavailableError(msg)
-            raise RealstarError(msg[:300])
+            raise CrawlerFailedError(msg[:400])
         return final
+
+    def _save_transcript(self, cmd: str, lines: list[str], code: int | None) -> None:
+        """마지막 실행 기록: output/raw/debug/crawler_last.log (문제 확인용)."""
+        try:
+            d = self.output_dir / "raw" / "debug"
+            d.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+            (d / "crawler_last.log").write_text(f"[{stamp}] {cmd} (exit {code})\n" + "\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            pass
 
     def collect_all(self, product_id: str, url: str | None, *, force: bool = False, on_event: EventCallback | None = None) -> dict[str, Any]:
         """상품 하나를 수집(또는 저장된 파일 재사용)하고 수집기 형식 데이터를 돌려준다."""

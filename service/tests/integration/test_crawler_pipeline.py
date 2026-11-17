@@ -158,3 +158,13 @@ def test_search_blocked_has_message(crawler_settings: Settings, monkeypatch: pyt
     svc, _, _ = make(crawler_settings, NoDetectorBackend())
     r = svc.search("아무 상품")
     assert r.status == "blocked" and "링크" in (r.message or "")
+
+
+def test_crawler_crash_shows_reason(crawler_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKE_COUPANG_CRASH", "Target page, context or browser has been closed")
+    svc, disp, _ = make(crawler_settings, NoDetectorBackend())
+    v = run(svc, disp)
+    assert v["status"] == "failed" and v["error"]["code"] == "crawler_failed"
+    assert v["error"]["message"].startswith("리뷰를 수집하지 못했어요: 요약 정보를 가져오지 못함")
+    log_file = crawler_settings.crawler_output_dir / "raw" / "debug" / "crawler_last.log"
+    assert "browser has been closed" in log_file.read_text(encoding="utf-8")

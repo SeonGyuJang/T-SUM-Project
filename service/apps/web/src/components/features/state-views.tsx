@@ -23,6 +23,7 @@ const ERROR_NEXT: Record<string, string> = {
   page_budget_exceeded: "오늘 수집할 수 있는 양을 모두 썼어요.",
   scraper_busy: "다른 분석이 끝나면 다시 시도해 주세요.",
   crawler_unavailable: "서버에서 수집기(coupang_reviews.py)와 scrapling 설치 상태를 확인해 주세요.",
+  crawler_failed: "쿠팡 페이지가 열리지 않았거나 수집기가 중간에 멈췄어요. 잠시 후 다시 시도해 주세요.",
 };
 
 export function ErrorState({ error, productId }: { error?: AnalysisError | null; productId?: string }) {
@@ -33,6 +34,13 @@ export function ErrorState({ error, productId }: { error?: AnalysisError | null;
       <h2 className="text-h3">분석을 마치지 못했어요</h2>
       <p className="max-w-md text-muted">{msg}</p>
       {error?.code && ERROR_NEXT[error.code] && <p className="max-w-md text-caption text-muted">{ERROR_NEXT[error.code]}</p>}
+      {typeof error?.detail === "string" && error.detail && !msg.includes(error.detail) && (
+        <details className="w-full max-w-xl rounded-lg border border-border bg-subtle text-left">
+          <summary className="cursor-pointer px-4 py-2.5 text-caption font-semibold">자세한 오류 내용</summary>
+          <pre className="whitespace-pre-wrap break-all px-4 pb-3 font-mono text-[0.8rem] text-muted">{error.detail}</pre>
+          <p className="px-4 pb-3 text-caption text-muted">서버 터미널의 [수집기] 줄과 output/raw/debug/crawler_last.log 에서 전체 기록을 볼 수 있어요.</p>
+        </details>
+      )}
       <div className="mt-2 flex flex-wrap justify-center gap-3">
         <ButtonLink href="/analyze">다시 분석하기</ButtonLink>
         {error?.cached_analysis_id && (

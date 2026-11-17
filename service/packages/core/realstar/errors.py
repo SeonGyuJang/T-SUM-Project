@@ -95,3 +95,13 @@ class CrawlerUnavailableError(RealstarError):
 
     code = "crawler_unavailable"
     user_message = "리뷰 수집기를 실행할 수 없어요. 서버의 수집기 설치 상태를 확인해 주세요."
+
+
+class CrawlerFailedError(RealstarError):
+    """수집기가 실행됐지만 도중에 실패했다. 원인 문구를 그대로 화면에 보여 준다."""
+
+    code = "crawler_failed"
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.user_message = f"리뷰를 수집하지 못했어요: {detail[:200]}"

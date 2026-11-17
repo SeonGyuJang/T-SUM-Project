@@ -4,6 +4,7 @@
   FAKE_COUPANG_COUNTS  별점별 전체 리뷰 수 JSON (기본 {"5": 42, "4": 13, "3": 5, "2": 0, "1": 3})
   FAKE_COUPANG_BLOCK   "1"이면 상품 페이지가 HTTP 403
   FAKE_COUPANG_SEARCH  검색 결과 HTML 파일 경로
+  FAKE_COUPANG_CRASH   값이 있으면 리뷰 API 호출 때 그 문구로 예외
   FAKE_COUPANG_DELAY   API 응답마다 기다릴 초 (진행 화면 확인용, 기본 0)
 """
 
@@ -68,6 +69,8 @@ class FakePage:
         if arg is None:  # og:title / og:image
             return {"title": f"{NAME} | 쿠팡", "image": "//thumbnail.coupangcdn.com/fake.jpg"}
         time.sleep(float(os.environ.get("FAKE_COUPANG_DELAY") or 0))
+        if os.environ.get("FAKE_COUPANG_CRASH"):
+            raise RuntimeError(os.environ["FAKE_COUPANG_CRASH"])
         q = {k: v[0] for k, v in parse_qs(urlparse(arg).query).items()}
         counts = _counts()
         star = int(q["ratings"]) if q.get("ratings") else None

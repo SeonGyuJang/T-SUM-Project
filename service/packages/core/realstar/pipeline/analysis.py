@@ -90,6 +90,7 @@ class AnalysisPipeline:
     def _fail(self, analysis_id: str, status: str, err: RealstarError, extra: dict[str, Any] | None = None) -> None:
         error = {"code": err.code, "message": err.user_message, "detail": err.detail}
         error.update(extra or {})
+        print(f"[분석 {analysis_id}] {status}: {err.code} · {err.detail or err.user_message}", flush=True)
         with session_scope(self.db) as s:
             a = s.get(Analysis, analysis_id)
             if a is None:
@@ -227,7 +228,7 @@ class AnalysisPipeline:
         except Exception as e:
             log.exception("collect failed")
             outcome, detail = "error", {"exception": type(e).__name__, "detail": str(e)[:500]}
-            self._fail(analysis_id, "failed", RealstarError(str(e)[:200]))
+            self._fail(analysis_id, "failed", RealstarError(f"{type(e).__name__}: {e}"[:400]))
             return False
         finally:
             with session_scope(self.db) as s:
@@ -392,7 +393,7 @@ class AnalysisPipeline:
             self._fail(analysis_id, "failed", e)
         except Exception as e:
             log.exception("detect/aggregate failed")
-            self._fail(analysis_id, "failed", RealstarError(str(e)[:200]))
+            self._fail(analysis_id, "failed", RealstarError(f"{type(e).__name__}: {e}"[:400]))
 
     def _detect_and_aggregate(self, analysis_id: str) -> None:
         self._set(analysis_id, status="detecting")

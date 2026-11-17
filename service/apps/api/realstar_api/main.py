@@ -42,6 +42,7 @@ STATUS_FOR_CODE = {
     "detector_unavailable": 503,
     "blocked": 503,
     "crawler_unavailable": 503,
+    "crawler_failed": 502,
     "page_budget_exceeded": 429,
 }
 
@@ -104,7 +105,9 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
     app.state.settings = settings
 
     @app.exception_handler(RealstarError)
-    async def _realstar_error(_: Request, exc: RealstarError) -> JSONResponse:
+    async def _realstar_error(request: Request, exc: RealstarError) -> JSONResponse:
+        # 거절·실패 이유를 서버 터미널에도 남긴다(브라우저 콘솔에는 상태 코드만 보인다)
+        print(f"[요청 오류] {request.method} {request.url.path} → {exc.code}: {exc.user_message} ({exc.detail})", flush=True)
         return JSONResponse(
             status_code=STATUS_FOR_CODE.get(exc.code, 500),
             content={"error": {"code": exc.code, "message": exc.user_message}},

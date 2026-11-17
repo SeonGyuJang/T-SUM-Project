@@ -18,13 +18,6 @@ def test_cli_analyze_fixture(settings: Settings, tmp_path: Path, monkeypatch: py
     assert data["product"]["product_id"] == "1000000002" and data["ratings"]["avg_all"] is not None
 
 
-def test_cli_cooldown(settings: Settings, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setattr(cli, "get_settings", lambda: settings)
-    assert cli.main(["cooldown"]) == 0
-    assert '"active": false' in capsys.readouterr().out
-    assert cli.main(["cooldown", "--clear"]) == 0
-
-
 def test_cli_export_demo_refuses_dummy(settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     out = tmp_path / "r.json"

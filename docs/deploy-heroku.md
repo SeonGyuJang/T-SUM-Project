@@ -11,9 +11,10 @@ Heroku는 앱 하나에 외부로 열린 `web` 프로세스가 하나뿐이고 �
 | Heroku 앱 | 스택 | 프로세스 | 하는 일 |
 |---|---|---|---|
 | `realstar-api` | container (`heroku.yml`) | `web` | FastAPI (`/api/*`) |
-| | | `detect` | 탐지·집계 Celery 워커. **AI 모델을 프로세스 안에서 로드**(`DETECTOR_MODE=inprocess`) |
-| | | `scrape` | 수집 Celery 워커(Chrome + Xvfb, 동시성 1) |
+| | | `detect` | 수집(fixture)·탐지·집계 Celery 워커. **AI 모델을 프로세스 안에서 로드**(`DETECTOR_MODE=inprocess`) |
 | | | release | `alembic upgrade head` (배포마다 DB 마이그레이션) |
+
+> 라이브 쿠팡 수집은 이 서비스에 없다(스크래퍼 제거). 저장된 리뷰 JSON으로 분석한다.
 | `realstar-web` | heroku-24 (Node 빌드팩) | `web` | Next.js 홈페이지 |
 
 애드온(`realstar-api`에 추가): Heroku Postgres → `DATABASE_URL`, Heroku Key-Value Store(Redis) → `REDIS_URL`.
@@ -33,13 +34,11 @@ heroku config:set -a realstar-api \
   TASK_BACKEND=celery \
   DETECTOR_MODE=inprocess \
   RESOLVE_TIMEOUT_SEC=25 \
-  SCRAPER_HEADLESS=true \
-  OCR_ENGINE=none \
-  AUTHOR_HASH_SALT=$(python -c "import secrets;print(secrets.token_hex(16))")
+  OCR_ENGINE=none
 
 git remote add heroku-api https://git.heroku.com/realstar-api.git
 git push heroku-api <배포할 브랜치>:main
-heroku ps:scale -a realstar-api web=1:standard-1x detect=1:standard-2x scrape=1:standard-2x
+heroku ps:scale -a realstar-api web=1:standard-1x detect=1:standard-2x
 
 # ── 홈페이지 앱 ───────────────────────────
 heroku create realstar-web
@@ -79,21 +78,16 @@ Heroku에는 볼륨이 없고 `model/artifacts/`는 git에 올라가지 않는�
 
 ## 5. ⚠️ 꼭 알아야 할 점
 
-1. **쿠팡이 Heroku에서의 접속을 막을 가능성이 높다.** Heroku 다이노는 미국 데이터센터(AWS) IP를 쓰고, 쿠팡은 비브라우저·데이터센터 접근을 막는 엣지 보안을 운영한다(README 11).
-   차단되면 서비스는 규칙대로 즉시 멈추고 60분 쉬며 "지금은 리뷰를 가져올 수 없어요"를 보여준다. 우회(프록시 등)는 하지 않는다.
-   먼저 `docs/phase0-spike-guide.md`로 오너 PC에서 수집이 되는지 확인하고, Heroku에서도 한 번 시험해 보길 권한다.
-   구조상 `scrape` 워커는 Heroku 밖(예: 팀원 PC)에서 Heroku의 `REDIS_URL`·`DATABASE_URL`에 연결해 돌릴 수도 있다(이 경우 `heroku ps:scale scrape=0`).
-   어디서 수집할지는 사이트 정책·법적 검토(TBD-1)와 함께 팀이 정할 일이다.
+1. **리뷰 수집은 이 서비스에 없다.** 라이브 스크래퍼는 제거되었고, 분석은 저장된 리뷰 JSON으로 한다.
+   실제 리뷰로 분석하려면 별도 수집 결과를 `tests/fixtures/json` 형식으로 넣어야 한다(자동 연결은 아직 없음).
 2. **요청 30초 제한:** 상품명·단축 링크 해석은 최대 25초만 기다린다(`RESOLVE_TIMEOUT_SEC=25`). 다른 분석이 수집 중이면 "잠시 후 다시 시도" 안내가 나온다. 분석 자체는 비동기라 영향 없다.
-3. **파일 시스템은 임시:** 다이노가 재시작되면 `/tmp`가 비워진다. 상태(쿨다운·일일 상한·락)는 Redis, 데이터는 Postgres에 있으므로 문제없다. 디버그용 리뷰 HTML(`/tmp/realstar/scrape_html`)만 사라진다.
+3. **파일 시스템은 임시:** 다이노가 재시작되면 `/tmp`가 비워진다. 상태(락 등)는 Redis, 데이터는 Postgres에 있으므로 문제없다.
 4. **비용(2026-07 기준 표):** Standard-1X $25/월, Standard-2X $50/월, Performance-L $500/월 + Postgres·Redis 애드온 요금. 발표 기간에만 다이노를 켜고(`heroku ps:scale ...=1`) 끝나면 0으로 줄이면 아낄 수 있다.
-5. **Eco·Basic 다이노는 메모리 0.5GB**라 Chrome 수집 워커에는 부족하다.
 
 ## 6. 다시 배포·운영
 
 ```bash
 git push heroku-api <브랜치>:main      # 백엔드(배포마다 마이그레이션 자동)
 git push heroku-web <브랜치>:main      # 홈페이지
-heroku logs -t -a realstar-api --dyno scrape
-heroku run -a realstar-api "python -m realstar cooldown"          # 차단 쿨다운 확인
+heroku logs -t -a realstar-api --dyno detect
 ```

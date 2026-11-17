@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 def run_browser_resolve(settings: Settings, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
     """단축 링크 해석·상품명 검색. 수집 워커(또는 inline 스크래퍼 스레드)에서 실행된다."""
     state = get_state_store(settings)
-    cooldown = Cooldown(state, settings.scraper_block_cooldown_min)
+    cooldown = Cooldown(state, settings.block_cooldown_min)
     if cooldown.status():
         return ResolveResult(status="blocked", input_type=payload.get("input_type", kind)).model_dump()  # type: ignore[arg-type]
     cache = repo.DbSearchCache(settings.database_url)

@@ -5,4 +5,3 @@
 """
 
 __version__ = "0.1.0"
-SCRAPER_VERSION = f"realstar-scraper-{__version__}"

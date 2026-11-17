@@ -89,7 +89,7 @@ def test_blocked_stops_and_starts_cooldown(settings: Settings) -> None:
     assert v["status"] == "blocked" and v["result"] is None  # 부분 결과로 결과를 만들지 않는다
     assert v["error"]["code"] == "blocked" and "cooldown_until" in v["error"]
     assert v["error"]["partial_counts"] == {"5": 100, "4": 100}
-    cd = Cooldown(get_state_store(settings), settings.scraper_block_cooldown_min)
+    cd = Cooldown(get_state_store(settings), settings.block_cooldown_min)
     assert cd.status() is not None
     # 쿨다운 동안 새 수집은 즉시 blocked
     v2 = run(svc, disp, "1000000001")

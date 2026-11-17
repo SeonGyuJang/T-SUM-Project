@@ -29,12 +29,7 @@ def settings(tmp_path: Path) -> Settings:
         detector_mode="dummy",
         task_backend="inline",
         redis_url="",
-        scraper_debug_html_dir=tmp_path / "html",
         bootstrap_iterations=1000,
-        scraper_delay_min_sec=0.0,
-        scraper_delay_max_sec=0.0,
-        scraper_page_load_timeout_sec=1,
-        author_hash_salt="test-salt",
         ocr_engine="none",
     )
     init_db(s.database_url)

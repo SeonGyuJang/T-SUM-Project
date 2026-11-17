@@ -1,4 +1,4 @@
-# 저장소 루트 컨텍스트(Dockerfile.backend / Dockerfile.scraper)용
+# 저장소 루트 컨텍스트(Dockerfile.backend)용
 .git
 **/node_modules
 **/.venv

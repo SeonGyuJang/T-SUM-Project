@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import io
-import json
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
-from realstar.collectors.base import RawReview, SearchCandidate
-from realstar.collectors.export_training import export_training_batch, filter_before, read_targets
+from realstar.collectors.base import SearchCandidate
 from realstar.collectors.fixture_provider import FixtureProvider
 from realstar.config import Settings
 from realstar.detection import preprocess
@@ -186,29 +184,6 @@ def test_preprocess_passthrough_when_model_missing() -> None:
     assert c.source == "passthrough" and c.clean_text == "제목\n본문 ㅋㅋ" and c.len_chars == len("제목\n본문 ㅋㅋ")
     groups, src = preprocess.assign_dup_groups(["같은 글", "같은  글", "다른 글"])
     assert src == "exact_only" and groups[0] == groups[1] and groups[0] is not None and groups[2] is None
-
-
-def test_export_training(tmp_path: Path) -> None:
-    targets_file = tmp_path / "targets.txt"
-    targets_file.write_text("# 주석\n1000000002,주방용품\n")
-    out_path, n, outcome = export_training_batch(
-        FixtureProvider(JSON_DIR), read_targets(targets_file), tmp_path / "out", batch="t1", cutoff="2026-03-01", per_star_limit=3
-    )
-    rows = [json.loads(x) for x in out_path.read_text().splitlines()]
-    assert outcome == "ok" and n == len(rows) > 0
-    assert all(r["created_at"] < "2026-03-01" for r in rows)
-    assert set(rows[0]) == {"review_id", "product_id", "category", "product_name", "star", "title", "content", "created_at",
-                            "has_photo", "helpful_count", "collected_at", "source", "scraper_version"}
-    assert "author_hash" not in rows[0] and rows[0]["category"] == "주방용품"
-    per_star: dict[int, int] = {}
-    for r in rows:
-        per_star[r["star"]] = per_star.get(r["star"], 0) + 1
-    assert max(per_star.values()) <= 3
-
-
-def test_filter_before() -> None:
-    rs = [RawReview(review_id=str(i), product_id="p", star=5, content="x", created_at=d) for i, d in enumerate(["2022-11-29", "2022-11-30", None, "2021-01-01"])]
-    assert [r.review_id for r in filter_before(rs, "2022-11-30", 10)] == ["0", "3"]
 
 
 def test_search_candidate_roundtrip() -> None:

@@ -63,8 +63,4 @@ MODEL_VERSION=det-ko-review-v1.0
 
 - 예측은 `(review_id, model_version)`으로 저장되므로 버전이 바뀌면 자동으로 다시 판별한다. 이전 버전 결과는 남는다.
 - 결과 캐시(24시간)는 이전 모델 버전 결과를 보여줄 수 있다. 즉시 반영하려면 `force_refresh=true`로 다시 분석한다.
-- 학습용 쿠팡 과거 리뷰는 서비스 스크래퍼가 계약(4.12.1) 형식으로 내보낸다:
-  ```bash
-  python -m realstar export-training --targets products.txt --batch b001   # → model/data/raw/coupang/YYYYMMDD_b001.jsonl
-  ```
-  `products.txt`는 한 줄에 `product_id,카테고리`. 더 느린 속도(8~15초)와 별도 일일 상한(300페이지)으로 돌고, 작성일 2022-11-30 이전 리뷰만 별점당 30개까지 내보낸다.
+- 학습용 쿠팡 과거 리뷰 수집은 이 서비스에 없다(라이브 스크래퍼 제거). 저장소 루트의 별도 스크립트 `coupang_reviews.py`로 모은 결과를 MODEL_DEV 4.12.1 형식으로 맞춰 `model/data/raw/coupang/`에 넣는다.

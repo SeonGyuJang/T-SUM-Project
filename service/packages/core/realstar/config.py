@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SERVICE_ROOT = Path(__file__).resolve().parents[3]  # .../service
@@ -16,46 +16,14 @@ REPO_ROOT = SERVICE_ROOT.parent
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # ── 스크래퍼 (README 0-3, 8장) ─────────────────────────────
-    scraper_headless: bool = False  # TBD-10: 기본값 사용 (화면 표시)
-    scraper_delay_min_sec: float = 3.0
-    scraper_delay_max_sec: float = 7.0
-    scraper_page_load_timeout_sec: int = 20
-    scraper_max_pages_per_analysis: int = 80
-    scraper_max_pages_per_day: int = 1500
-    scraper_block_cooldown_min: int = 60
-    scraper_parser_fail_threshold: float = 0.2
-    scraper_empty_streak_limit: int = 3
-    scraper_debug_html_dir: Path = SERVICE_ROOT / "var" / "scrape_html"
-    scraper_debug_html_keep: int = 20
-    scraper_chrome_binary: str | None = None  # 비워 두면 Selenium Manager가 찾는다
-    scraper_chromedriver_path: str | None = None
-    scraper_user_agent: str | None = None
-    # 수집 전용 Chrome 프로필 폴더. 비우면 매번 새 임시 프로필(쿠키 없음)로 시작한다.
-    scraper_user_data_dir: Path | None = None
-    scraper_custom_headers: dict[str, str] = Field(
-        default_factory=lambda: {"Accept-Language": "ko-KR,ko;q=0.9"}
-    )
-    # 컨테이너(Docker·Heroku)에서 Chrome을 띄울 때 필요한 표준 옵션(--no-sandbox, --disable-dev-shm-usage).
-    # 차단 우회와 무관한 실행 환경 옵션이다.
-    scraper_chrome_container: bool = False
-    sample_per_star: int = 100
-    review_sort: Literal["latest", "best"] = "latest"
-
-    # 학습용 배치 수집 (README 5.6: 서비스 수집보다 더 느리게, 일일 상한 별도)
-    training_delay_min_sec: float = 8.0
-    training_delay_max_sec: float = 15.0
-    training_max_pages_per_day: int = 300
-    training_export_dir: Path = REPO_ROOT / "model" / "data" / "raw" / "coupang"
-    training_cutoff_date: str = "2022-11-30"
-    training_per_star_limit: int = 30
-
-    # 수집 구현체: coupang(운영) | fixture(개발·테스트)
-    review_provider: Literal["coupang", "fixture"] = "coupang"
+    # ── 수집 ───────────────────────────────────────────────
+    # 라이브 쿠팡 스크래퍼는 제거됨. 현재는 저장된 JSON으로 동작하는 fixture만 지원한다.
+    review_provider: Literal["fixture"] = "fixture"
     fixture_dir: Path = SERVICE_ROOT / "tests" / "fixtures" / "json"
-
-    # 작성자 식별 정보는 해시만 저장한다. 솔트는 비밀값.
-    author_hash_salt: str = Field(default="", repr=False)
+    sample_per_star: int = 100  # 별점당 분석에 쓰는 최대 리뷰 수
+    review_sort: Literal["latest", "best"] = "latest"
+    # 수집이 불가(blocked) 상태가 되면 이 시간(분) 동안 새 수집을 쉬게 한다.
+    block_cooldown_min: int = 60
 
     # ── 비전 ──────────────────────────────────────────────
     ocr_engine: Literal["paddleocr", "easyocr", "none"] = "paddleocr"
@@ -104,24 +72,6 @@ class Settings(BaseSettings):
             if v.startswith(prefix):
                 return "postgresql+psycopg://" + v[len(prefix):]
         return v
-
-    @field_validator("scraper_user_data_dir", mode="before")
-    @classmethod
-    def _empty_user_data_dir_is_none(cls, v: object) -> object:
-        """SCRAPER_USER_DATA_DIR= 처럼 비워 두면 Path('.')가 아니라 '사용 안 함'으로 본다."""
-        return None if isinstance(v, str) and not v.strip() else v
-
-    @field_validator("scraper_custom_headers")
-    @classmethod
-    def _validate_scraper_custom_headers(cls, headers: dict[str, str]) -> dict[str, str]:
-        for name, value in headers.items():
-            if not name or any(char in name for char in "\r\n:"):
-                raise ValueError(f"invalid custom header name: {name!r}")
-            if "\r" in value or "\n" in value:
-                raise ValueError(f"invalid value for custom header {name!r}")
-            if name.lower() == "user-agent":
-                raise ValueError("configure User-Agent with SCRAPER_USER_AGENT")
-        return headers
 
     @property
     def redis_ssl_kwargs(self) -> dict[str, object]:

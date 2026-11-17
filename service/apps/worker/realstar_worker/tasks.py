@@ -21,7 +21,7 @@ def pipeline() -> AnalysisPipeline:
 
 @app.task(name="realstar.collect", acks_late=True, max_retries=0)
 def collect(analysis_id: str) -> None:
-    """scrape 큐(동시성 1). 수집이 끝나면 detect 큐로 넘긴다."""
+    """수집(fixture) 후 탐지·집계로 넘긴다."""
     if pipeline().collect(analysis_id):
         detect_aggregate.delay(analysis_id)
 

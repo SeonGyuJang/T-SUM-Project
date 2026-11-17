@@ -73,7 +73,7 @@ ProgressCallback = Callable[[CollectProgress], None]
 
 @runtime_checkable
 class ReviewProvider(Protocol):
-    """리뷰 수집 구현체 인터페이스. 운영: CoupangScraperProvider, 개발·테스트: FixtureProvider."""
+    """리뷰 수집 구현체 인터페이스. 저장된 JSON으로 동작하는 FixtureProvider."""
 
     def get_product_meta(self, product_id: str) -> ProductMeta: ...
 

@@ -1,7 +1,7 @@
-"""Celery 앱 설정 (README 4장, 6장).
+"""Celery 앱 설정.
 
+라이브 스크래퍼가 없어 수집·탐지·집계를 한 워커(detect 큐)가 처리한다.
 실행 예:
-  celery -A realstar_worker.celery_app worker -Q scrape -c 1 --prefetch-multiplier 1 -n scrape@%h
   celery -A realstar_worker.celery_app worker -Q detect -c 2 -n detect@%h
 """
 
@@ -19,8 +19,8 @@ broker = settings.redis_url or "redis://localhost:6379/0"
 app = Celery("realstar", broker=broker, backend=broker, include=["realstar_worker.tasks"])
 app.conf.update(
     task_routes={
-        "realstar.collect": {"queue": "scrape"},
-        "realstar.browser_resolve": {"queue": "scrape"},
+        "realstar.collect": {"queue": "detect"},
+        "realstar.browser_resolve": {"queue": "detect"},
         "realstar.detect_aggregate": {"queue": "detect"},
     },
     task_acks_late=True,

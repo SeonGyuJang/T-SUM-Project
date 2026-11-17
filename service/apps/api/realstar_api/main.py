@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -144,7 +143,7 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         def _collect() -> dict[str, Any]:
-            cd = Cooldown(get_state_store(settings), settings.scraper_block_cooldown_min).status()
+            cd = Cooldown(get_state_store(settings), settings.block_cooldown_min).status()
             det = light_info(
                 settings.detector_mode, detector_url=settings.detector_url, artifact_path=settings.model_artifact_path,
                 min_chars=settings.min_chars,
@@ -157,11 +156,7 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
                 "version": __version__,
                 "detector": det.model_dump(),
                 "preprocess": {"realstar_model": preprocess.model_preprocess_available()},
-                "browser": {
-                    "provider": settings.review_provider,
-                    "chrome_found": bool(settings.scraper_chrome_binary or shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chrome")),
-                    "headless": settings.scraper_headless,
-                },
+                "review_provider": settings.review_provider,
                 "cooldown": {"active": cd is not None, **(cd or {})},
                 "ocr": {"engine": settings.ocr_engine, "available": bool(ocr and ocr.available), "vlm_enabled": settings.vlm_enabled},
                 "task_backend": settings.task_backend,

@@ -53,21 +53,6 @@ services:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
 
-  worker-scrape:
-    build: { context: .., dockerfile: Dockerfile.scraper }
-    env_file: .env
-    environment:
-      <<: *py-env
-      TRAINING_EXPORT_DIR: /export/coupang
-      STATE_DIR: /app/service/var/state
-    shm_size: 1gb
-    volumes:
-      - scrape-var:/app/service/var
-      - ../model/data/raw/coupang:/export/coupang
-    depends_on:
-      migrate: { condition: service_completed_successfully }
-      redis: { condition: service_healthy }
-
   worker-detect:
     build: { context: .., dockerfile: Dockerfile.backend }
     env_file: .env
@@ -89,4 +74,3 @@ services:
 
 volumes:
   pgdata:
-  scrape-var:

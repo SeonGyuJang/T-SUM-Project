@@ -65,7 +65,7 @@ class AnalysisPipeline:
         self.settings = settings
         self.db = settings.database_url
         self.state = state or get_state_store(settings)
-        self.cooldown = Cooldown(self.state, settings.scraper_block_cooldown_min)
+        self.cooldown = Cooldown(self.state, settings.block_cooldown_min)
         self.provider_factory = provider_factory or (lambda: make_provider(settings, self.state))
         self._detector = detector
         self.lock_timeout_sec = lock_timeout_sec
@@ -106,8 +106,7 @@ class AnalysisPipeline:
             a.progress = prog
 
     def _eta(self, remaining_pages: int) -> int:
-        avg_delay = (self.settings.scraper_delay_min_sec + self.settings.scraper_delay_max_sec) / 2
-        return int(remaining_pages * (avg_delay + 2.0)) + 20
+        return int(remaining_pages * 2.0) + 10
 
     # ── 1단계: 수집 ──────────────────────────────────────
     def collect(self, analysis_id: str) -> bool:

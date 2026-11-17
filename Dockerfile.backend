@@ -26,5 +26,5 @@ ARG INSTALL_MODEL=auto
 RUN if [ -f /app/model/pyproject.toml ] && [ "$INSTALL_MODEL" != "no" ]; then pip install -e /app/model; \
     else echo "realstar_model 없음: 모델 개발 완료 후 이미지를 다시 빌드하세요"; fi
 WORKDIR /app/service
-ENV STATE_DIR=/tmp/realstar/state SCRAPER_DEBUG_HTML_DIR=/tmp/realstar/scrape_html HF_HOME=/tmp/hf
+ENV STATE_DIR=/tmp/realstar/state HF_HOME=/tmp/hf
 CMD ["sh", "-c", "uvicorn --factory realstar_api.main:create_app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers"]

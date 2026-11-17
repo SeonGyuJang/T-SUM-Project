@@ -5,20 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "realstar-service"
 version = "0.1.0"
-description = "리얼별점 서비스: 수집·이미지 판독·집계·API·워커 (AI 탐지 모델은 model/의 realstar_model 패키지)"
+description = "리얼별점 서비스: 이미지 판독·집계·API·워커 (AI 탐지 모델은 model/의 realstar_model 패키지)"
 requires-python = ">=3.11"
 dependencies = [
   "pydantic>=2.7",
   "pydantic-settings>=2.3",
   "pyyaml>=6.0",
-  "beautifulsoup4>=4.12",
-  "lxml>=5.2",
   "numpy>=1.26",
   "pillow>=10.3",
   "sqlalchemy>=2.0.30",
   "alembic>=1.13",
   "httpx>=0.27",
-  "selenium>=4.21",
 ]
 
 [project.optional-dependencies]
@@ -36,16 +33,13 @@ realstar = "realstar.cli:main"
 where = ["packages/core", "apps/api", "apps/worker", "apps/detector_server"]
 
 [tool.setuptools.package-data]
-"realstar.collectors.coupang" = ["selectors.yaml"]
 "realstar.vision" = ["ui_phrases.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q -m 'not browser and not live'"
+addopts = "-q"
 markers = [
-  "live: 실제 쿠팡 사이트에 접속하는 스모크 테스트 (CI에서 실행 금지, 수동 실행)",
   "contract: realstar_model 패키지가 설치된 경우에만 실행되는 계약 테스트",
-  "browser: 로컬 Chrome + chromedriver가 필요한 테스트",
 ]
 
 [tool.coverage.run]

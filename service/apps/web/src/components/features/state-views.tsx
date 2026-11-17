@@ -22,6 +22,7 @@ const ERROR_NEXT: Record<string, string> = {
   detector_unavailable: "판별 모델 서버를 점검하고 있어요.",
   page_budget_exceeded: "오늘 수집할 수 있는 양을 모두 썼어요.",
   scraper_busy: "다른 분석이 끝나면 다시 시도해 주세요.",
+  crawler_unavailable: "서버에서 수집기(coupang_reviews.py)와 scrapling 설치 상태를 확인해 주세요.",
 };
 
 export function ErrorState({ error, productId }: { error?: AnalysisError | null; productId?: string }) {

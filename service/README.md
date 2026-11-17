@@ -3,16 +3,18 @@
 홈페이지, API, 비동기 워커, 이미지 판독(OCR/VLM), 별점 재계산·Top 5, 모델 연동 어댑터.
 AI 탐지 모델 자체는 `model/`(`realstar_model` 패키지) 담당이다. 연결 방법: [`docs/model-integration.md`](../docs/model-integration.md).
 
-> **라이브 쿠팡 스크래퍼는 제거되었다.** 이 서비스는 저장된 리뷰 JSON(fixture)으로 동작한다.
-> 리뷰 수집은 저장소 루트의 별도 스크립트 `coupang_reviews.py`가 독립적으로 담당하며, 그 결과를 이 서비스에
-> 자동으로 연결하지는 않는다(필요하면 `tests/fixtures/json` 형식으로 넣어 쓴다).
+> **리뷰 수집은 저장소 루트의 `coupang_reviews.py`가 담당한다.** 요청(링크·상품명·이미지)이 들어오면 API가
+> `collectors/crawler_runner.py`를 통해 그 스크립트를 subprocess로 실행하고, 진행 이벤트를 홈페이지 진행 화면에
+> 실시간으로 반영한다. 결과는 `output/products/<상품ID>.json`(수집기 형식)에 저장되고 홈페이지에 그대로 연결된다.
+> AI 판별 모델이 없으면(`DETECTOR_MODE=none`) 판별만 건너뛰고 나머지(별점 분포·수집 리뷰·결과 화면)는 모두 동작한다.
 
 ## 구성
 
 ```
 service/
 ├── packages/core/realstar/      # 파이썬 코어 (python -m realstar)
-│   ├── collectors/              # base.py(스키마·인터페이스), fixture_provider.py(저장된 JSON)
+│   ├── collectors/              # base.py(스키마·인터페이스), crawler_provider.py + crawler_runner.py(coupang_reviews.py 실행),
+│   │                            # fixture_provider.py(저장된 JSON)
 │   ├── resolver/                # url.py, name_search.py, image.py, scoring.py
 │   ├── vision/                  # ocr.py, vlm.py, product_text_heuristics.py, ui_phrases.yaml
 │   ├── aggregate/               # stats.py (별점 재계산), topk.py (Top 5)
@@ -39,12 +41,13 @@ service/
 cd service
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[api,dev]"
-cp .env.local.example .env                                   # fixture + 더미 판별기 + 단일 프로세스
+pip install "scrapling[fetchers]" && scrapling install       # 수집기용 (또는 .env의 CRAWLER_PYTHON)
+cp .env.local.example .env                                   # 수집기 + AI 판별 없음 + 단일 프로세스
 uvicorn --factory realstar_api.main:create_app --port 8000   # API
 # 새 터미널: cd apps/web && npm install && npm run dev        # 홈페이지 → http://localhost:3000
 ```
-CLI로 바로 확인: `python -m realstar analyze --url "https://www.coupang.com/vp/products/1000000001"`
-`dummy` 판별기 결과에는 "개발용 결과" 경고가 붙는다. fixture 상품: `1000000001`(별점 재계산 고정 예제),
+API: `GET /api/products`(수집한 상품), `GET /api/products/{id}/reviews?star=5&offset=0&limit=10`(수집 리뷰).
+`REVIEW_PROVIDER=fixture`면 쿠팡에 접속하지 않고 예시 JSON으로 동작한다. fixture 상품: `1000000001`(별점 재계산 고정 예제),
 `1000000002`(표본 부족), `1000000003`(차단 모의), `1000000004`(리뷰 없음), 단축 링크 `https://link.coupang.com/a/demo01`, 검색어 `텀블러`.
 
 ## 백엔드 없이 홈페이지만 (목업·발표 모드)
@@ -83,7 +86,7 @@ uvicorn --factory realstar_api.main:create_app --port 8000
 
 | 명령 | 용도 |
 |---|---|
-| `python -m realstar analyze --url <링크>` | 저장된 리뷰(fixture)로 상품 하나를 끝까지 분석 → 결과 JSON |
+| `python -m realstar analyze --url <링크>` | 상품 하나를 끝까지 분석(수집기 실행 또는 fixture) → 결과 JSON |
 | `python -m realstar export-demo --analysis-id … --key …` | 저장된 분석 결과 → 웹 발표 모드 데이터 |
 | `python -m realstar prepare-demo --products <파일>` | 상품 목록 분석 → 발표 모드 데이터 일괄 교체 |
 | `python -m realstar init-db` | 개발용 SQLite 테이블 생성 |

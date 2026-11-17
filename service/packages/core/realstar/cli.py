@@ -1,11 +1,11 @@
 """CLI: `python -m realstar <명령>`.
 
   init-db                            개발용 테이블 생성(SQLite). 운영은 `alembic upgrade head`
-  analyze --url <쿠팡 링크>          저장된 리뷰(fixture)로 상품 하나를 끝까지 분석해 결과 JSON 출력
+  analyze --url <쿠팡 링크>          상품 하나를 끝까지 분석(REVIEW_PROVIDER에 따라 수집기 실행 또는 fixture)해 결과 JSON 출력
   export-demo --analysis-id <id>     저장된 분석 결과를 웹 발표 모드 데이터로 내보냄
   prepare-demo --products <파일>     상품 목록을 분석 → 발표 모드 데이터로 한 번에 교체
 
-참고: 라이브 쿠팡 스크래퍼는 제거되었다. analyze/prepare-demo는 fixture(저장된 리뷰 JSON) 기준으로 동작한다.
+참고: REVIEW_PROVIDER=crawler(기본)면 저장소 루트의 coupang_reviews.py를 실행해 수집한다.
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def common(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--detector", choices=["http", "inprocess", "dummy"])
+        sp.add_argument("--detector", choices=["http", "inprocess", "dummy", "none"])
         sp.add_argument("--db", help="DATABASE_URL 덮어쓰기")
 
     sp = sub.add_parser("init-db"); common(sp); sp.set_defaults(fn=cmd_init_db)  # noqa: E702

@@ -1,6 +1,7 @@
 import { ArrowRight, BarChart3, ShieldCheck, Sigma } from "lucide-react";
 import Link from "next/link";
 import { AnalyzeInput } from "@/components/features/analyze-input";
+import { CollectedProducts } from "@/components/features/collected-products";
 import { HowSteps } from "@/components/features/how-steps";
 import { RatingCompareCard } from "@/components/features/report/rating-compare-card";
 import { Accordion } from "@/components/ui/accordion";
@@ -31,6 +32,10 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      <div className="container-page pt-12 md:pt-16">
+        <CollectedProducts limit={4} title="최근 수집한 상품" />
+      </div>
 
       <section className="container-page section" aria-labelledby="how">
         <h2 id="how" className="text-h2">어떻게 작동하나요?</h2>

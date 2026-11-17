@@ -197,6 +197,67 @@ class RealstarService:
         self.dispatcher.enqueue_analysis(analysis_id)
         return {"analysis_id": analysis_id, "status": "queued", "queue_position": pos, "cached": False}
 
+    # ── 수집한 상품·리뷰 (/api/products) ──────────────────────
+    def list_products(self, limit: int = 60) -> list[dict[str, Any]]:
+        """수집을 마친 상품 목록: 수집기 output/ 파일 + DB(이 서비스로 분석한 상품)."""
+        from sqlalchemy import select
+
+        items: dict[str, dict[str, Any]] = {}
+        if self.settings.review_provider == "crawler":
+            from realstar.collectors.crawler_provider import list_collected
+
+            for it in list_collected(self.settings):
+                items[it["product_id"]] = {**it, "source": "crawler_file"}
+        with session_scope(self.settings.database_url) as s:
+            for p in s.scalars(select(Product).where(Product.reviews_fetched_at.is_not(None))).all():
+                cur = items.get(p.product_id)
+                counts = {int(k): int(v) for k, v in (p.star_counts or {}).items()}
+                n = sum(counts.values())
+                base = cur or {
+                    "product_id": p.product_id, "name": p.name, "image_url": p.image_url, "url": p.url,
+                    "total_reviews": p.total_reviews or 0,
+                    "collected_reviews": len(repo.get_reviews(s, p.product_id)),
+                    "collected_at": (p.sampling or {}).get("collected_at"),
+                    "complete": (p.sampling or {}).get("complete", True),
+                    "avg_all": round(sum(k * v for k, v in counts.items()) / n, 2) if n else None,
+                    "source": "db",
+                }
+                base["image_url"] = base.get("image_url") or p.image_url
+                done = repo.latest_done_analysis(s, p.product_id, self.settings.cache_ttl_hours)
+                base["analysis_id"] = done.analysis_id if done is not None else None
+                items[p.product_id] = base
+        out = sorted(items.values(), key=lambda x: x.get("collected_at") or "", reverse=True)
+        return out[:limit]
+
+    def list_reviews(self, product_id: str, *, star: int | None, offset: int, limit: int, model_version: str | None = None) -> dict[str, Any]:
+        from sqlalchemy import func, select
+
+        from realstar.db.models import Prediction, Review
+
+        with session_scope(self.settings.database_url) as s:
+            q = select(Review).where(Review.product_id == product_id)
+            cq = select(func.count()).select_from(Review).where(Review.product_id == product_id)
+            if star is not None:
+                q, cq = q.where(Review.star == star), cq.where(Review.star == star)
+            total = int(s.scalar(cq) or 0)
+            rows = s.scalars(q.order_by(Review.star.desc(), Review.created_at.desc(), Review.review_id).offset(offset).limit(limit)).all()
+            preds: dict[str, Prediction] = {}
+            if model_version and rows:
+                preds = {p.review_id: p for p in s.scalars(select(Prediction).where(
+                    Prediction.review_id.in_([r.review_id for r in rows]), Prediction.model_version == model_version)).all()}
+            items = [
+                {
+                    "review_id": r.review_id, "star": r.star, "title": r.title, "content": r.content,
+                    "created_at": r.created_at, "has_photo": r.has_photo, "option_name": r.option_name,
+                    "len_chars": r.len_chars or len(r.content or ""),
+                    "is_sponsored": bool(r.is_sponsored or r.is_cash_event),
+                    "label": preds[r.review_id].label if r.review_id in preds else None,
+                    "p_ai": preds[r.review_id].p_ai if r.review_id in preds else None,
+                }
+                for r in rows
+            ]
+        return {"product_id": product_id, "star": star, "total": total, "offset": offset, "limit": limit, "items": items}
+
     def get_analysis(self, analysis_id: str) -> dict[str, Any] | None:
         with session_scope(self.settings.database_url) as s:
             a = s.get(Analysis, analysis_id)

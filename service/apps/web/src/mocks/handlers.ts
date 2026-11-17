@@ -2,7 +2,7 @@
 import { http, HttpResponse, delay } from "msw";
 import { apiBaseUrl } from "@/lib/site";
 import { ApiError } from "@/lib/api/errors";
-import { localCreate, localGet, localResolve } from "@/lib/api/local-backend";
+import { localCreate, localGet, localProducts, localResolve, localReviews } from "@/lib/api/local-backend";
 
 function fail(e: unknown) {
   if (e instanceof ApiError) return HttpResponse.json({ error: { code: e.code, message: e.message } }, { status: e.status || 500 });
@@ -33,6 +33,22 @@ export const handlers = [
     } catch (e) {
       return fail(e);
     }
+  }),
+  http.get(`${apiBaseUrl}/api/products`, async () => {
+    await delay(100);
+    return HttpResponse.json({ items: localProducts("mock") });
+  }),
+  http.get(`${apiBaseUrl}/api/products/:pid/reviews`, async ({ params, request }) => {
+    await delay(100);
+    const u = new URL(request.url);
+    const star = u.searchParams.get("star");
+    return HttpResponse.json(
+      localReviews(String(params.pid), {
+        star: star ? Number(star) : null,
+        offset: Number(u.searchParams.get("offset") ?? 0),
+        limit: Number(u.searchParams.get("limit") ?? 10),
+      }),
+    );
   }),
   http.get(`${apiBaseUrl}/api/analyses/:id`, async ({ params }) => {
     await delay(100);

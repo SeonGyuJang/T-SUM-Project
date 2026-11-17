@@ -37,7 +37,7 @@ export function SelectView() {
           {res && res.extracted && typeof res.extracted.product_name === "string" && (
             <Notice tone="info" title="이미지에서 읽은 상품명">{res.extracted.product_name}</Notice>
           )}
-          {res && res.candidates.length > 0 && <CandidateList candidates={res.candidates} busy={state.busy} onSelect={(c) => void start(c.product_id, { type: res.input_type, query: res.query ?? undefined })} />}
+          {res && res.candidates.length > 0 && <CandidateList candidates={res.candidates} busy={state.busy} onSelect={(c) => void start(c.product_id, { type: res.input_type, query: res.query ?? undefined, url: c.url ?? undefined })} />}
           {res && res.candidates.length === 0 && (
             <EmptyState icon={SearchX} title="비슷한 상품을 찾지 못했어요" body="상품명을 조금 더 간단히 입력하거나 링크로 분석해 보세요." action={<ButtonLink href="/analyze">다시 검색하기</ButtonLink>} />
           )}

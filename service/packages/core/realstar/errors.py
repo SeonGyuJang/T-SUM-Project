@@ -88,3 +88,10 @@ class DetectorUnavailableError(RealstarError):
 class VisionUnavailableError(RealstarError):
     code = "vision_unavailable"
     user_message = "지금은 이미지 인식을 사용할 수 없어요. 링크나 상품명으로 검색해 주세요."
+
+
+class CrawlerUnavailableError(RealstarError):
+    """수집기(coupang_reviews.py)를 실행할 수 없다: 파일 없음, scrapling 미설치 등."""
+
+    code = "crawler_unavailable"
+    user_message = "리뷰 수집기를 실행할 수 없어요. 서버의 수집기 설치 상태를 확인해 주세요."

@@ -6,7 +6,8 @@
  */
 import { DEMO_EXAMPLES, exampleByKey, exampleByProductId, type DemoExample } from "@/demo/examples";
 import { ApiError, DEMO_ONLY_MESSAGE } from "./errors";
-import type { AnalysisView, Candidate, CreateAnalysisResponse, Progress, ResolveResult, StarKey } from "./schema";
+import type { AnalysisView, Candidate, CreateAnalysisResponse, ProductSummary, Progress, ResolveResult, ReviewItem, ReviewPage, StarKey } from "./schema";
+import type { ReviewQuery } from "./types";
 
 export type LocalMode = "demo" | "mock";
 export const REPLAY_MS = 12_000;
@@ -188,6 +189,40 @@ export function localGet(id: string, now = Date.now()): AnalysisView {
   };
 }
 
+/** 예시 상품 목록 (발표·목업 모드에서 '수집한 상품' 영역에 쓴다) */
+export function localProducts(mode: LocalMode): ProductSummary[] {
+  return DEMO_EXAMPLES.map((ex) => ({
+    product_id: ex.result.product.product_id,
+    name: ex.result.product.name,
+    image_url: ex.result.product.image_url,
+    url: ex.result.product.url,
+    total_reviews: ex.result.platform_stats.total_reviews,
+    collected_reviews: Object.values(ex.result.per_star).reduce((a, s) => a + s.collected, 0),
+    collected_at: ex.result.sampling.collected_at,
+    complete: true,
+    avg_all: ex.result.ratings.avg_all,
+    analysis_id: `${mode}-${ex.key}`,
+    source: "example",
+  }));
+}
+
+/** 예시 데이터에는 리뷰 원문 전체가 없어 Top 5 리뷰를 원문 목록처럼 보여준다. */
+export function localReviews(productId: string, q: ReviewQuery = {}): ReviewPage {
+  const ex = exampleByProductId(productId);
+  const keys = (q.star ? [String(q.star)] : ["5", "4", "3", "2", "1"]) as StarKey[];
+  const all: ReviewItem[] = ex
+    ? keys.flatMap((k) =>
+        ex.result.top_human_reviews[k].map((r) => ({
+          review_id: r.review_id, star: Number(k), title: r.title, content: r.text, created_at: r.created_at,
+          has_photo: r.has_photo, option_name: null, len_chars: r.len_chars, is_sponsored: false, label: "human", p_ai: 1 - r.p_human,
+        })),
+      )
+    : [];
+  const offset = q.offset ?? 0;
+  const limit = q.limit ?? 10;
+  return { product_id: productId, star: q.star ?? null, total: all.length, offset, limit, items: all.slice(offset, offset + limit) };
+}
+
 export function localApiFor(mode: LocalMode) {
   const delay = <T,>(v: () => T, ms = 350) =>
     new Promise<T>((resolve, reject) => setTimeout(() => {
@@ -198,5 +233,7 @@ export function localApiFor(mode: LocalMode) {
       delay(() => localResolve(mode, "url" in input ? { url: input.url } : "query" in input ? { query: input.query } : { image: true }), 600),
     createAnalysis: (pid: string) => delay(() => localCreate(mode, pid)),
     getAnalysis: (id: string) => delay(() => localGet(id), 120),
+    listProducts: () => delay(() => localProducts(mode), 150),
+    getReviews: (pid: string, q?: ReviewQuery) => delay(() => localReviews(pid, q), 150),
   };
 }

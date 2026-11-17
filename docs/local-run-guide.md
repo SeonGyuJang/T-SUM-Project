@@ -1,11 +1,16 @@
-# 내 PC에서 실행하기 — API + 홈페이지
+# 내 PC에서 실행하기 — API + 홈페이지 + 수집기
 
-라이브 쿠팡 스크래퍼는 제거되었습니다. 이 서비스는 **저장된 리뷰 JSON(fixture)**으로 동작하며,
-AI 판별 자리에는 개발용 더미 판별기가 들어갑니다(결과 화면에 "개발용 결과" 표시, 숫자는 의미 없음).
-Redis·PostgreSQL·Celery 없이 프로세스 하나로 돌아갑니다.
+홈페이지에 **링크·상품명·캡처 이미지**를 넣으면, API가 저장소 루트의 수집기 `coupang_reviews.py`를
+그대로 실행해 리뷰를 모으고, 진행 상황(브라우저 실행 → 상품 페이지 → 별점별 개수 → 별점별 리뷰 수집)을
+홈페이지에 실시간으로 보여 줍니다. 수집이 끝나면 별점 분포와 수집한 리뷰 원문이 결과 화면에 나옵니다.
 
-리뷰 수집은 이 저장소 루트의 별도 스크립트 `coupang_reviews.py`가 담당합니다(이 서비스와 분리되어 독립 실행).
-그 스크립트의 결과 JSON을 서비스에 넣는 연결은 아직 하지 않았습니다.
+- **AI 판별(가짜 리뷰 탐지)만 빠져 있습니다.** 모델이 없으면(`DETECTOR_MODE=none`) 판별 단계는 건너뛰고
+  "AI 판별 준비 중"으로 표시합니다. 모델이 연결되면 같은 리뷰로 사람 리뷰 기준 별점을 계산합니다.
+- 수집 결과는 수집기 형식 그대로 `output/products/<상품ID>.json`에 저장됩니다. 수집기를 터미널에서
+  직접 실행해 모은 상품도 홈페이지의 "수집한 상품" 목록에 바로 나옵니다.
+- 이미 수집을 마친 상품은 다시 수집하지 않고(`CRAWLER_REUSE_HOURS`, 기본 24시간) 결과 화면의
+  "최신 리뷰로 다시 수집" 버튼으로만 새로 모읍니다.
+- Redis·PostgreSQL·Celery 없이 프로세스 하나로 돌아갑니다.
 
 ## ⓪ 준비물
 
@@ -28,6 +33,7 @@ cd service
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[api,dev]"
+pip install "scrapling[fetchers]" && scrapling install   # 수집기(coupang_reviews.py)용
 cp .env.local.example .env
 ```
 
@@ -37,8 +43,12 @@ cd service
 py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e ".[api,dev]"
+pip install "scrapling[fetchers]"; scrapling install
 copy .env.local.example .env
 ```
+
+> 수집기를 이미 다른 가상환경에서 쓰고 있다면 scrapling을 다시 설치하지 않고 `.env`의
+> `CRAWLER_PYTHON`에 그 파이썬 경로(예: `/Users/me/crawler-venv/bin/python`)를 적어도 됩니다.
 
 홈페이지(Node.js) — 새 터미널:
 ```bash
@@ -54,7 +64,8 @@ npm install
 ```bash
 uvicorn --factory realstar_api.main:create_app --port 8000
 ```
-확인: http://localhost:8000/api/health → `"status": "ok"`, `"review_provider": "fixture"`.
+확인: http://localhost:8000/api/health → `"status": "ok"`, `"review_provider": "crawler"`,
+`"crawler": {"script_found": true, "scrapling_installed": true, ...}`.
 
 **터미널 2 — 홈페이지** (service/apps/web 폴더):
 ```bash
@@ -62,20 +73,25 @@ npm run dev
 ```
 → http://localhost:3000 접속. 끌 때는 각 터미널에서 `Ctrl + C`.
 
-## ③ 확인할 것 (사용자 요청 처리)
-
-입력 화면에서 아래 **예시 상품 번호**를 링크 형태로 넣으면 저장된 리뷰로 분석이 돌아갑니다.
+## ③ 확인할 것
 
 | # | 해 볼 것 | 정상이면 |
 |---|---|---|
-| 1 | 홈·작동 원리·FAQ 이동 | 모든 페이지가 열리고 깨진 링크 없음 |
-| 2 | 링크 탭에 `https://www.coupang.com/vp/products/1000000001` 입력 → 분석하기 | 진행 화면 → 결과 화면. 전체 평균 vs 사람 리뷰 기준 별점, 별점별 차트, Top 5, "개발용 결과" 표시 |
-| 3 | 같은 링크 다시 분석 | 저장된 결과가 바로 열림(24시간 캐시) |
-| 4 | 상품명 탭에 `텀블러` 입력 | 후보 카드가 나오고, 고르면 분석 시작 |
-| 5 | 쿠팡이 아닌 주소 입력 | "지금은 쿠팡 상품 링크만 분석할 수 있어요." |
+| 1 | 링크 탭에 쿠팡 상품 링크(`https://www.coupang.com/vp/products/…`) 입력 → 분석하기 | 수집용 Chrome 창이 뜨고, 홈페이지 진행 화면에 단계·별점별 막대·전체 진행률·경과 시간·수집 기록이 실시간으로 바뀜 |
+| 2 | 수집이 끝날 때까지 기다림 (상품 하나에 보통 3~10분) | 결과 화면: 전체 평균, 별점 분포, "AI 판별 준비 중" 안내, 수집한 리뷰(별점별·페이지) |
+| 3 | `/analyze` 또는 홈 화면 | "수집한 상품" 목록에 방금 상품(과 `output/products`에 있던 상품)이 보임 → 누르면 바로 결과 |
+| 4 | 결과 화면 "최신 리뷰로 다시 수집" | 저장 파일을 무시하고 수집기를 다시 실행 |
+| 5 | 상품명 탭에 상품명 입력 | 이미 수집한 상품 + 쿠팡 검색 결과 후보 → 고르면 수집 시작 |
+| 6 | 공유 링크(`https://link.coupang.com/a/…`) | 브라우저로 열어 상품 번호를 찾은 뒤 수집 |
+| 7 | 이미지 탭 (OCR 설치 시) | 이미지에서 읽은 상품명으로 검색 → 후보 선택 → 수집 |
 
-예시 상품(fixture, `service/tests/fixtures/json`): `1000000001`(별점 재계산 고정 예제), `1000000002`(표본 부족),
-`1000000003`(차단 모의), `1000000004`(리뷰 없음), 검색어 `텀블러`.
+쿠팡이 차단(HTTP 403 등)하면 "지금은 리뷰를 가져올 수 없어요" 화면이 나오고 `BLOCK_COOLDOWN_MIN` 동안 새 수집을 쉽니다.
+수집기 실패 기록은 수집기와 같은 `output/failed.txt`에 남습니다.
+
+### 쿠팡에 접속하지 않고 확인하기 (예시 JSON)
+
+`.env`에서 `REVIEW_PROVIDER=fixture`로 바꾸면 저장된 예시 상품으로 동작합니다:
+`1000000001`(별점 재계산 고정 예제), `1000000002`(표본 부족), `1000000003`(차단 모의), `1000000004`(리뷰 없음), 검색어 `텀블러`.
 
 ### 수집 없이 화면만 보기
 
@@ -87,6 +103,9 @@ npm run dev:demo      # 발표 모드: 저장된 예시 결과만, 네트워크 
 
 ## 참고
 
-- 실제 리뷰로 분석하려면 `coupang_reviews.py`로 수집한 JSON을 `service/tests/fixtures/json` 형식(상품 메타 + 별점별 리뷰)으로 넣으면 됩니다. 자동 변환·연결은 아직 없습니다.
+- 수집기 연결 구조: API → `collectors/crawler_provider.py` → (subprocess) `collectors/crawler_runner.py` → `coupang_reviews.py`.
+  runner는 수집기 함수를 감싸서 진행 상황만 관찰하고, 수집 로직 자체는 건드리지 않습니다.
+  수집기 파일의 함수 이름(`collect_product`, `collect_summary`, `collect_rating`, `fetch_review_page`, `open_session`)을
+  바꾸면 runner도 함께 맞춰 주세요.
 - 수집 데이터는 `service/var/realstar.db`(SQLite)에 쌓입니다. 처음부터 다시 하려면 API를 끄고 `service/var`를 지우세요.
 - 운영(Heroku) 구성은 `docs/deploy-heroku.md`.

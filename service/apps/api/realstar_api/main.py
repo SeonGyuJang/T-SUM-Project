@@ -4,7 +4,9 @@
   POST /api/analyses             {"product_id", "force_refresh"} → {"analysis_id", "status", "queue_position"}
   GET  /api/analyses/{id}        상태·진행률·결과
   GET  /api/analyses/{id}/events SSE 진행 이벤트
-  GET  /api/health               detector, 브라우저 드라이버, 차단 쿨다운 상태
+  GET  /api/products             수집한 상품 목록 (수집기 output/ + DB)
+  GET  /api/products/{id}/reviews  수집한 리뷰 (별점 필터·페이지)
+  GET  /api/health               detector, 수집기, 차단 쿨다운 상태
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -39,6 +41,7 @@ STATUS_FOR_CODE = {
     "vision_unavailable": 503,
     "detector_unavailable": 503,
     "blocked": 503,
+    "crawler_unavailable": 503,
     "page_budget_exceeded": 429,
 }
 
@@ -47,6 +50,24 @@ class CreateAnalysis(BaseModel):
     product_id: str = Field(min_length=1, max_length=20)
     force_refresh: bool = False
     source: dict[str, Any] | None = None
+
+
+def _crawler_health(settings: Settings) -> dict[str, Any]:
+    if settings.review_provider != "crawler":
+        return {"enabled": False}
+    import importlib.util
+
+    script = settings.crawler_script
+    return {
+        "enabled": True,
+        "script": str(script),
+        "script_found": script.exists(),
+        "python": settings.crawler_python or "(서비스와 같은 파이썬)",
+        # 다른 파이썬을 지정했으면 그쪽 설치 여부는 여기서 알 수 없다
+        "scrapling_installed": None if settings.crawler_python else importlib.util.find_spec("scrapling") is not None,
+        "headless": settings.crawler_headless,
+        "output_dir": str(settings.crawler_output_dir),
+    }
 
 
 def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None = None) -> FastAPI:
@@ -111,6 +132,22 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
             return JSONResponse(status_code=404, content={"error": {"code": "not_found", "message": "분석 결과를 찾지 못했어요. 주소를 확인하거나 다시 분석해 주세요."}})  # type: ignore[return-value]
         return view
 
+    @app.get("/api/products")
+    async def list_products() -> dict[str, Any]:
+        return {"items": await asyncio.to_thread(svc.list_products)}
+
+    @app.get("/api/products/{product_id}/reviews")
+    async def list_reviews(
+        product_id: str,
+        star: int | None = Query(default=None, ge=1, le=5),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=10, ge=1, le=50),
+        model_version: str | None = Query(default=None, max_length=64),
+    ) -> dict[str, Any]:
+        if not product_id.isdigit():
+            raise InvalidInputError("bad product_id", "상품 번호가 올바르지 않아요.")
+        return await asyncio.to_thread(svc.list_reviews, product_id, star=star, offset=offset, limit=limit, model_version=model_version)
+
     @app.get("/api/analyses/{analysis_id}/events")
     async def analysis_events(analysis_id: str, request: Request) -> StreamingResponse:
         async def gen() -> AsyncIterator[str]:
@@ -157,6 +194,7 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
                 "detector": det.model_dump(),
                 "preprocess": {"realstar_model": preprocess.model_preprocess_available()},
                 "review_provider": settings.review_provider,
+                "crawler": _crawler_health(settings),
                 "cooldown": {"active": cd is not None, **(cd or {})},
                 "ocr": {"engine": settings.ocr_engine, "available": bool(ocr and ocr.available), "vlm_enabled": settings.vlm_enabled},
                 "task_backend": settings.task_backend,

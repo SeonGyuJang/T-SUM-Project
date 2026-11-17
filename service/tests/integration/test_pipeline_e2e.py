@@ -133,8 +133,16 @@ def test_detector_unavailable(settings: Settings) -> None:
             i.error = "model not loaded"
             return i
 
+    # 기본(detection_fallback=True): 판별만 건너뛰고 수집 결과는 보여 준다
     svc, disp = make_service(settings, Down())
     v = run(svc, disp, "1000000002")
+    assert v["status"] == "done"
+    assert v["result"]["detection"] == {"available": False, "message": "model not loaded"}
+    assert v["result"]["ratings"]["avg_all"] is not None and v["result"]["ratings"]["avg_human"] is None
+
+    # fallback을 끄면 예전처럼 실패로 끝난다
+    svc, disp = make_service(settings.model_copy(update={"detection_fallback": False}), Down())
+    v = run(svc, disp, "1000000002", force=True)
     assert v["status"] == "failed" and v["error"]["code"] == "detector_unavailable"
 
 

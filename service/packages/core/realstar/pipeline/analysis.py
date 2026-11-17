@@ -106,7 +106,16 @@ class AnalysisPipeline:
             a.progress = prog
 
     def _eta(self, remaining_pages: int) -> int:
+        if self.settings.review_provider == "crawler":
+            return int(remaining_pages * 3.5) + 15  # 수집기: API 호출 사이 1.5~3.5초 대기 + 응답 시간
         return int(remaining_pages * 2.0) + 10
+
+    def _sample_sort(self) -> str:
+        if self.settings.review_provider == "crawler":
+            from realstar.collectors.crawler_provider import CRAWLER_SORT
+
+            return CRAWLER_SORT
+        return self.settings.review_sort
 
     # ── 1단계: 수집 ──────────────────────────────────────
     def collect(self, analysis_id: str) -> bool:
@@ -116,7 +125,7 @@ class AnalysisPipeline:
             if a is None:
                 return False
             product_id, force = a.product_id, a.force_refresh
-            if not force and repo.cached_product(s, product_id, self.settings.cache_ttl_hours, self.settings.sample_per_star, self.settings.review_sort):
+            if not force and repo.cached_product(s, product_id, self.settings.cache_ttl_hours, self.settings.sample_per_star, self._sample_sort()):
                 a.progress = {**(a.progress or {}), "stage": "collect", "from_cache": True, "message": "저장된 리뷰 표본을 사용해요"}
                 return True
 
@@ -143,6 +152,8 @@ class AnalysisPipeline:
         outcome: str = "ok"
         detail: dict[str, Any] = {}
         try:
+            if hasattr(provider, "collect_all"):
+                return self._collect_with_crawler(analysis_id, product_id, provider)
             meta = provider.get_product_meta(product_id)
             counts = meta.resolved_star_counts() if meta.total_reviews else dict.fromkeys(STARS, 0)
             with session_scope(self.db) as s:
@@ -219,6 +230,146 @@ class AnalysisPipeline:
                 repo.add_scrape_log(s, product_id, started, provider.pages_loaded, outcome, detail)
             provider.close()
 
+    @staticmethod
+    def _source_url(inp: Any, product_id: str) -> str | None:
+        """요청에 실린 원래 상품 링크(옵션 itemId 포함)가 같은 상품이면 그 링크로 수집한다."""
+        from realstar.resolver.url import parse_product_url
+
+        if not isinstance(inp, dict):
+            return None
+        for key in ("url", "query"):
+            v = inp.get(key)
+            if isinstance(v, str) and v.startswith("http"):
+                parsed = parse_product_url(v)
+                if parsed is not None and parsed.product_id == product_id:
+                    return v
+        return None
+
+    # ── 1단계(수집기): coupang_reviews.py 실행 + 진행 이벤트 반영 ──────────
+    def _collect_with_crawler(self, analysis_id: str, product_id: str, provider: Any) -> bool:
+        from realstar.collectors.crawler_provider import meta_from_file, reviews_from_file
+
+        page_size = 10
+        per_star = self.settings.sample_per_star
+        st: dict[str, Any] = {"targets": {}, "collected": {}, "logs": [], "last_write": 0.0}
+        with session_scope(self.db) as s:
+            a = s.get(Analysis, analysis_id)
+            assert a is not None
+            force = a.force_refresh
+            url = self._source_url(a.input, product_id)
+        try:
+            detection_ready = bool(self.detector.info().ready)
+        except Exception:
+            detection_ready = False
+        self._progress(analysis_id, started_at=repo.now_utc().isoformat(), crawl_stage="start",
+                       message="리뷰 수집을 준비하고 있어요", logs=[],
+                       detection_available=detection_ready or not self.settings.detection_fallback)
+
+        def remaining_pages() -> int:
+            n = 0
+            for s_ in STARS:
+                t = st["targets"].get(s_)
+                if t is None:
+                    t = per_star
+                n += math.ceil(max(0, t - st["collected"].get(s_, 0)) / page_size)
+            return n
+
+        def on_event(evt: dict[str, Any]) -> None:
+            import time as _time
+
+            kind = evt.get("type")
+            if kind == "reuse":
+                self._progress(analysis_id, crawl_stage="reuse", from_saved_file=True,
+                               message="이미 수집해 둔 리뷰 파일을 불러오고 있어요")
+            elif kind == "stage":
+                self._progress(analysis_id, crawl_stage=evt.get("stage"), message=evt.get("message"))
+            elif kind == "product":
+                prod = {"product_id": product_id}
+                if evt.get("name"):
+                    prod["name"] = evt["name"]
+                if evt.get("image_url"):
+                    prod["image_url"] = evt["image_url"]
+                self._progress(analysis_id, product=prod)
+            elif kind == "summary":
+                counts = {int(k): int(v or 0) for k, v in (evt.get("rating_counts") or {}).items()}
+                stars: dict[str, Any] = {}
+                for s_ in STARS:
+                    if s_ in counts:
+                        st["targets"][s_] = min(per_star, counts[s_])
+                    stars[str(s_)] = {
+                        "collected": 0, "target": st["targets"].get(s_, per_star), "total": counts.get(s_, 0),
+                        "status": "skipped" if counts.get(s_) == 0 else "pending",
+                    }
+                self._progress(analysis_id, stars=stars, total_reviews=evt.get("total"),
+                               eta_seconds=self._eta(remaining_pages()), message="별점별 리뷰를 모으고 있어요")
+            elif kind == "star_start":
+                s_ = int(evt["star"])
+                st["targets"][s_] = int(evt.get("target") or 0)
+                self._progress(analysis_id, current_star=s_,
+                               stars={str(s_): {"status": "collecting", "target": st["targets"][s_]}},
+                               message=f"{s_}점 리뷰를 모으고 있어요")
+            elif kind == "page":
+                s_ = int(evt["star"])
+                st["collected"][s_] = int(evt.get("collected") or 0)
+                if evt.get("target"):
+                    st["targets"][s_] = int(evt["target"])
+                now = _time.monotonic()
+                if now - st["last_write"] < 0.8:  # DB 쓰기를 너무 자주 하지 않는다
+                    return
+                st["last_write"] = now
+                self._progress(
+                    analysis_id, pages_loaded=evt.get("pages_loaded"),
+                    stars={str(s_): {"collected": st["collected"][s_], "target": st["targets"].get(s_, 0)}},
+                    eta_seconds=self._eta(remaining_pages()),
+                    message=f"{s_}점 리뷰 수집 중 {st['collected'][s_]}/{st['targets'].get(s_, 0)}",
+                )
+            elif kind == "star_done":
+                s_ = int(evt["star"])
+                got, tgt = int(evt.get("collected") or 0), int(evt.get("target") or 0)
+                st["collected"][s_], st["targets"][s_] = got, tgt
+                self._progress(analysis_id, stars={str(s_): {"collected": got, "target": tgt,
+                                                             "status": "done" if got >= tgt else "partial"}},
+                               eta_seconds=self._eta(remaining_pages()))
+            elif kind == "log":
+                msg = str(evt.get("message") or "").strip()
+                if not msg:
+                    return
+                st["logs"] = (st["logs"] + [{"at": repo.now_utc().isoformat(), "message": msg[:200]}])[-8:]
+                self._progress(analysis_id, logs=st["logs"])
+
+        data = provider.collect_all(product_id, url, force=force, on_event=on_event)
+        meta = meta_from_file(data)
+        meta.product_id = meta.product_id or product_id
+        reviews = reviews_from_file(data)
+        counts = meta.resolved_star_counts() if meta.total_reviews else dict.fromkeys(STARS, 0)
+        info = data.get("상품정보") or {}
+        with session_scope(self.db) as s:
+            repo.upsert_product(s, meta, counts)
+        by_star = {s_: [r for r in reviews if r.star == s_][:per_star] for s_ in STARS}
+        self._progress(
+            analysis_id,
+            product={"product_id": product_id, "name": meta.name, "image_url": meta.image_url},
+            stars={str(s_): {"collected": len(by_star[s_]), "target": min(per_star, counts.get(s_, 0)) or len(by_star[s_]),
+                             "total": counts.get(s_, 0), "status": "done" if counts.get(s_, 0) else "skipped"} for s_ in STARS},
+            eta_seconds=0, crawl_stage="saved", message="수집한 리뷰를 저장하고 있어요",
+        )
+        from realstar.collectors.crawler_provider import parse_collected_at
+
+        collected_at = parse_collected_at(info.get("수집_시각"))
+        sampling = {
+            "per_star_limit": per_star,
+            "sort": self._sample_sort(),
+            "collected_at": (collected_at or repo.now_utc()).isoformat(),
+            "pages_loaded": provider.pages_loaded,
+            "selectors_version": getattr(provider, "selectors_version", None),
+            "complete": bool(info.get("수집_완료", True)),
+            "shortfalls": info.get("목표_미달") or {},
+        }
+        with session_scope(self.db) as s:
+            repo.replace_reviews(s, product_id, [r for s_ in STARS for r in by_star[s_]])
+            repo.mark_reviews_fetched(s, product_id, sampling)
+        return True
+
     # ── 2단계: 탐지 + 집계 ──────────────────────────────────
     def detect_and_aggregate(self, analysis_id: str) -> None:
         try:
@@ -236,7 +387,10 @@ class AnalysisPipeline:
         self._progress(analysis_id, stage="detect", message="AI 작성 여부를 판별하고 있어요")
         info = self.detector.info()
         if not info.ready:
-            raise DetectorUnavailableError(info.error or "detector not ready")
+            if not self.settings.detection_fallback:
+                raise DetectorUnavailableError(info.error or "detector not ready")
+            self._finish_without_detection(analysis_id, info)
+            return
         version = info.model_version or "unknown"
         min_chars = max(self.settings.min_chars, info.min_chars or 0)
 
@@ -311,6 +465,96 @@ class AnalysisPipeline:
             a.finished_at = repo.now_utc()
             a.cached = from_cache
             a.progress = {**(a.progress or {}), "stage": "done", "message": "분석이 끝났어요"}
+
+    # ── 2단계(모델 없음): AI 판별을 건너뛰고 수집 결과만 정리 ───────────────
+    def _finish_without_detection(self, analysis_id: str, info: ModelInfo) -> None:
+        self._progress(analysis_id, stage="aggregate", detection_available=False,
+                       message="AI 판별 모델이 아직 없어 수집 결과만 정리하고 있어요")
+        with session_scope(self.db) as s:
+            a = s.get(Analysis, analysis_id)
+            assert a is not None
+            product = s.get(Product, a.product_id)
+            assert product is not None
+            rows = repo.get_reviews(s, a.product_id)
+            pre = [preprocess.clean(r.title, r.content) for r in rows]
+            for r, c in zip(rows, pre, strict=True):
+                r.clean_text, r.len_chars = c.clean_text, c.len_chars
+                r.is_sponsored, r.is_cash_event = c.is_sponsored, c.is_cash_event
+            N = {s_: int((product.star_counts or {}).get(str(s_), 0)) for s_ in STARS}
+            by_star: dict[int, list[Any]] = {s_: [r for r in rows if r.star == s_] for s_ in STARS}
+            sampling = dict(product.sampling or {})
+            from_cache = bool((a.progress or {}).get("from_cache"))
+            prod = {"product_id": product.product_id, "name": product.name, "image_url": product.image_url, "url": product.url}
+            displayed_avg, total_reviews = product.displayed_avg, product.total_reviews or 0
+            flags = {
+                "sponsored_count": sum(1 for r in rows if r.is_sponsored),
+                "cash_event_count": sum(1 for r in rows if r.is_cash_event),
+                "near_duplicate_groups": 0,
+            }
+            per_star_out: dict[str, Any] = {}
+            review_stats: dict[str, Any] = {}
+            for s_ in STARS:
+                lst = by_star[s_]
+                per_star_out[str(s_)] = {"total": N[s_], "collected": len(lst), "human": 0, "ai": 0, "uncertain": 0,
+                                         "human_ratio": None, "ratio_substituted": False}
+                lens = [r.len_chars or len(r.content or "") for r in lst]
+                review_stats[str(s_)] = {
+                    "collected": len(lst),
+                    "avg_chars": round(sum(lens) / len(lens), 1) if lens else None,
+                    "photo_count": sum(1 for r in lst if r.has_photo),
+                    "sponsored_count": sum(1 for r in lst if r.is_sponsored or r.is_cash_event),
+                }
+
+        n_all = sum(N.values())
+        avg_all = sum(s_ * n for s_, n in N.items()) / n_all if n_all else None
+        warnings: list[dict[str, Any]] = [{
+            "code": "detection_unavailable", "level": "info",
+            "message": "AI 판별 모델이 아직 연결되지 않아 사람 리뷰 기준 별점과 AI 리뷰 비중은 계산하지 않았어요. "
+                       "수집한 리뷰와 별점 분포는 그대로 볼 수 있어요.",
+        }]
+        if n_all == 0:
+            warnings.append({"code": "no_reviews", "level": "info", "message": "아직 리뷰가 없는 상품이에요."})
+        if displayed_avg is not None and avg_all is not None and abs(displayed_avg - avg_all) > self.settings.displayed_avg_warn_gap:
+            warnings.append({"code": "displayed_avg_mismatch", "level": "info",
+                             "message": f"쿠팡 표시 평균(★{displayed_avg:.1f})과 별점 분포로 계산한 평균(★{avg_all:.2f})이 달라요."})
+        if sampling.get("complete") is False:
+            short = ", ".join(f"{k} {v}" for k, v in (sampling.get("shortfalls") or {}).items())
+            warnings.append({"code": "collect_partial", "level": "warning",
+                             "message": f"일부 별점은 목표만큼 모으지 못했어요({short}). '다시 수집'으로 채울 수 있어요."})
+        result = {
+            "analysis_id": analysis_id,
+            "product": prod,
+            "platform_stats": {"displayed_avg": displayed_avg, "total_reviews": total_reviews,
+                               "star_counts": {str(s_): N[s_] for s_ in STARS}},
+            "sampling": {
+                "per_star_limit": sampling.get("per_star_limit", self.settings.sample_per_star),
+                "sort": sampling.get("sort", self._sample_sort()),
+                "collected_at": sampling.get("collected_at"),
+                "pages_loaded": sampling.get("pages_loaded", 0),
+                "selectors_version": sampling.get("selectors_version"),
+                "from_cache": from_cache,
+            },
+            "per_star": per_star_out,
+            "ratings": {"avg_all": None if avg_all is None else round(avg_all, 4), "avg_human": None, "diff": None,
+                        "avg_human_ci95": None, "diff_ci95": None, "ai_share": None, "ai_share_ci95": None, "corrected": None},
+            "top_human_reviews": {str(s_): [] for s_ in STARS},
+            "flags": flags,
+            "warnings": warnings,
+            "model": {"version": "none", "T_AI": None, "T_HUMAN": None, "thresholds": None, "is_dummy": False},
+            "assumptions": ["전체 평균은 쿠팡이 알려 준 별점별 리뷰 개수로 계산했어요."],
+            "detection": {"available": False, "message": info.error or "AI 판별 모델이 아직 연결되지 않았어요."},
+            "review_stats": review_stats,
+        }
+        validated = AnalysisResult.model_validate(result).model_dump()
+        with session_scope(self.db) as s:
+            a = s.get(Analysis, analysis_id)
+            assert a is not None
+            a.result = validated
+            a.status = "done"
+            a.model_version = None
+            a.finished_at = repo.now_utc()
+            a.cached = from_cache
+            a.progress = {**(a.progress or {}), "stage": "done", "message": "수집 결과를 정리했어요"}
 
     def _build_result(
         self,

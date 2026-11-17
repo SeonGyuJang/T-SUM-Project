@@ -17,10 +17,24 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # ── 수집 ───────────────────────────────────────────────
-    # 라이브 쿠팡 스크래퍼는 제거됨. 현재는 저장된 JSON으로 동작하는 fixture만 지원한다.
-    review_provider: Literal["fixture"] = "fixture"
+    # crawler: 요청이 들어오면 저장소 루트의 수집기(coupang_reviews.py)를 실행한다(기본).
+    # fixture: 저장된 JSON(tests/fixtures/json)만 쓴다(개발·테스트).
+    review_provider: Literal["crawler", "fixture"] = "crawler"
     fixture_dir: Path = SERVICE_ROOT / "tests" / "fixtures" / "json"
-    sample_per_star: int = 100  # 별점당 분석에 쓰는 최대 리뷰 수
+    sample_per_star: int = 100  # 별점당 분석에 쓰는 최대 리뷰 수 (수집기 --per-rating)
+
+    # ── 수집기 실행 (review_provider=crawler) ───────────────────
+    crawler_script: Path = REPO_ROOT / "coupang_reviews.py"
+    # 수집기를 실행할 파이썬. 비우면 서비스와 같은 파이썬(scrapling이 설치돼 있어야 함).
+    crawler_python: str = ""
+    # 수집 결과 폴더. 수집기를 직접 실행할 때와 같은 output/ 을 쓰므로, CLI로 모은 상품도 홈페이지에 나온다.
+    crawler_output_dir: Path = REPO_ROOT / "output"
+    crawler_headless: bool = False  # 수집기 안내: 창을 숨기면 차단이 늘 수 있음
+    crawler_timeout_min: int = 40  # 상품 하나 수집 최대 시간
+    crawler_search_timeout_sec: int = 80  # 상품명 검색·단축 링크 해석 최대 시간
+    crawler_search_limit: int = 20
+    # 이미 수집을 마친 파일이 이 시간 안이면 다시 수집하지 않는다(0이면 항상 재사용). '다시 수집'은 무시하고 새로 모은다.
+    crawler_reuse_hours: int = 24
     review_sort: Literal["latest", "best"] = "latest"
     # 수집이 불가(blocked) 상태가 되면 이 시간(분) 동안 새 수집을 쉬게 한다.
     block_cooldown_min: int = 60
@@ -40,11 +54,14 @@ class Settings(BaseSettings):
     state_dir: Path = SERVICE_ROOT / "var" / "state"
     cors_origins: str = "http://localhost:3000"
     # 상품명·단축 링크 해석이 수집 큐를 기다리는 최대 시간. Heroku는 요청 30초 제한이 있어 25로 둔다.
-    resolve_timeout_sec: int = 90
+    resolve_timeout_sec: int = 120
 
     # ── 탐지 / 집계 ───────────────────────────────────────
     # detector_mode: http(detector_server 호출) | inprocess(realstar_model 직접 로드) | dummy(개발 전용)
-    detector_mode: Literal["http", "inprocess", "dummy"] = "http"
+    #                | none(AI 모델 미연결: 판별을 건너뛰고 수집·별점 분포·리뷰만 보여 준다)
+    detector_mode: Literal["http", "inprocess", "dummy", "none"] = "none"
+    # 모델이 준비되지 않았을 때 분석을 실패로 끝내지 않고 'AI 판별 제외' 결과를 만든다.
+    detection_fallback: bool = True
     model_artifact_path: Path = REPO_ROOT / "model" / "artifacts" / "det-ko-review-v1.0"
     # 아티팩트 폴더가 없을 때 받아 올 tar.gz 주소(Heroku처럼 볼륨이 없는 배포용). 비우면 받지 않는다.
     model_artifact_url: str = ""

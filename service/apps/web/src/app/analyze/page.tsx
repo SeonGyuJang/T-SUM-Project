@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AnalyzeInput } from "@/components/features/analyze-input";
+import { CollectedProducts } from "@/components/features/collected-products";
 
 export const metadata: Metadata = {
   title: "분석 시작",
@@ -18,9 +19,12 @@ export default function AnalyzePage() {
     <div className="container-page section">
       <div className="mx-auto max-w-prose">
         <h1 className="text-h1">어떤 상품을 분석할까요?</h1>
-        <p className="mt-3 text-muted">링크, 상품명, 캡처 이미지 중 편한 방법으로 알려 주세요. 리뷰를 모으는 데 몇 분 걸릴 수 있어요.</p>
+        <p className="mt-3 text-muted">링크, 상품명, 캡처 이미지 중 편한 방법으로 알려 주세요. 처음 보는 상품은 리뷰를 모으는 데 몇 분 걸려요. 진행 상황은 화면에서 실시간으로 볼 수 있어요.</p>
         <div className="mt-10">
           <AnalyzeInput autoFocus />
+        </div>
+        <div className="mt-16">
+          <CollectedProducts limit={20} />
         </div>
         <section aria-labelledby="examples" className="mt-16">
           <h2 id="examples" className="text-h3">입력 예시</h2>

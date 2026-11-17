@@ -17,11 +17,11 @@ export function useStartAnalysis() {
   const [error, setError] = useState<string | null>(null);
 
   const start = useCallback(
-    async (productId: string, source?: Record<string, unknown>) => {
-      setState({ busy: true, label: "분석을 준비하고 있어요" });
+    async (productId: string, source?: Record<string, unknown>, opts?: { forceRefresh?: boolean }) => {
+      setState({ busy: true, label: opts?.forceRefresh ? "리뷰를 다시 수집하도록 요청하고 있어요" : "분석을 준비하고 있어요" });
       setError(null);
       try {
-        const res = await api.createAnalysis(productId, { source });
+        const res = await api.createAnalysis(productId, { source, forceRefresh: opts?.forceRefresh });
         router.push(`/analyses/${res.analysis_id}`);
       } catch (e) {
         setError(e instanceof ApiError ? e.message : "분석을 시작하지 못했어요. 잠시 후 다시 시도해 주세요.");
@@ -54,7 +54,8 @@ export function useStartAnalysis() {
         return;
       }
       if (res.status === "resolved" && res.candidates[0]) {
-        await start(res.candidates[0].product_id, { type: res.input_type, query: res.query ?? undefined });
+        const c = res.candidates[0];
+        await start(c.product_id, { type: res.input_type, query: res.query ?? undefined, url: c.url ?? undefined });
         return;
       }
       saveResolve(res);

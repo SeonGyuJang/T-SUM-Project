@@ -205,8 +205,22 @@ class DummyDetectorBackend:
         return out
 
 
+class NoDetectorBackend:
+    """AI 판별 모델이 아직 없을 때. info().ready=False → 파이프라인이 판별을 건너뛴다."""
+
+    MESSAGE = "AI 판별 모델이 아직 연결되지 않았어요."
+
+    def info(self) -> ModelInfo:
+        return ModelInfo(ready=False, backend="none", error=self.MESSAGE)
+
+    def predict(self, items: list[DetectInput], batch_size: int = 64) -> list[DetectOutput]:
+        raise DetectorUnavailableError(self.MESSAGE)
+
+
 def light_info(mode: str, *, detector_url: str, artifact_path: Path, min_chars: int) -> ModelInfo:
     """상태 확인용: 모델을 메모리에 올리지 않고 준비 여부만 본다(/api/health)."""
+    if mode == "none":
+        return NoDetectorBackend().info()
     if mode == "dummy":
         return DummyDetectorBackend(min_chars=min_chars).info()
     if mode == "http":
@@ -231,4 +245,6 @@ def make_backend(
         return RealstarModelBackend(artifact_path, artifact_url)
     if mode == "dummy":
         return DummyDetectorBackend(min_chars=min_chars)
+    if mode == "none":
+        return NoDetectorBackend()
     return HttpDetectorBackend(detector_url, timeout=timeout)

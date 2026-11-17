@@ -85,6 +85,11 @@ class ModelOut(BaseModel):
     is_dummy: bool = False
 
 
+class DetectionOut(BaseModel):
+    available: bool = True
+    message: str | None = None
+
+
 class AnalysisResult(BaseModel):
     analysis_id: str
     product: ProductOut
@@ -97,3 +102,7 @@ class AnalysisResult(BaseModel):
     warnings: list[WarningOut]
     model: ModelOut
     assumptions: list[str] = Field(default_factory=list)
+    # AI 판별을 했는지(모델 미연결이면 available=false). 이전 결과와의 호환을 위해 기본값이 있다.
+    detection: DetectionOut = Field(default_factory=DetectionOut)
+    # 별점별 수집 표본 통계(평균 글자 수, 사진 리뷰 수 등)
+    review_stats: dict[str, dict[str, Any]] | None = None

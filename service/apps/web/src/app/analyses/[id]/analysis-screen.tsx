@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError, TERMINAL } from "@/lib/api";
 import { site } from "@/lib/site";
 
-const POLL_MS = 2500;
+const POLL_MS = 1500; // 수집 진행률이 자주 바뀌므로 짧게 폴링한다
 
 export function AnalysisScreen({ id }: { id: string }) {
   const q = useQuery({

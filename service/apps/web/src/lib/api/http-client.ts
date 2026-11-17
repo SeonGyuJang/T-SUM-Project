@@ -4,12 +4,16 @@ import {
   analysisViewSchema,
   apiErrorSchema,
   createAnalysisSchema,
+  productListSchema,
   resolveResultSchema,
+  reviewPageSchema,
   type AnalysisView,
   type CreateAnalysisResponse,
+  type ProductSummary,
   type ResolveResult,
+  type ReviewPage,
 } from "./schema";
-import type { RealstarApi, ResolveInput } from "./types";
+import type { RealstarApi, ResolveInput, ReviewQuery } from "./types";
 
 async function request<T>(path: string, init: RequestInit, parse: (data: unknown) => T): Promise<T> {
   let res: Response;
@@ -58,5 +62,16 @@ export const httpApi: RealstarApi = {
   },
   getAnalysis(id): Promise<AnalysisView> {
     return request(`/api/analyses/${encodeURIComponent(id)}`, { method: "GET" }, (d) => analysisViewSchema.parse(d));
+  },
+  listProducts(): Promise<ProductSummary[]> {
+    return request("/api/products", { method: "GET" }, (d) => productListSchema.parse(d).items);
+  },
+  getReviews(productId: string, q: ReviewQuery = {}): Promise<ReviewPage> {
+    const params = new URLSearchParams();
+    if (q.star) params.set("star", String(q.star));
+    params.set("offset", String(q.offset ?? 0));
+    params.set("limit", String(q.limit ?? 10));
+    if (q.modelVersion) params.set("model_version", q.modelVersion);
+    return request(`/api/products/${encodeURIComponent(productId)}/reviews?${params}`, { method: "GET" }, (d) => reviewPageSchema.parse(d));
   },
 };

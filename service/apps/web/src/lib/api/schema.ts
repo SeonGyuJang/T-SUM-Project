@@ -124,6 +124,18 @@ export const analysisResultSchema = z.object({
     is_dummy: z.boolean().default(false),
   }),
   assumptions: z.array(z.string()).default([]),
+  /** AI 판별을 했는지. 모델이 아직 없으면 available=false이고 사람 리뷰 기준 값은 비어 있다. */
+  detection: z.object({ available: z.boolean().default(true), message: z.string().nullish() }).default({ available: true }),
+  review_stats: z
+    .record(
+      z.object({
+        collected: z.number().default(0),
+        avg_chars: z.number().nullish(),
+        photo_count: z.number().default(0),
+        sponsored_count: z.number().default(0),
+      }),
+    )
+    .nullish(),
 });
 export type AnalysisResult = z.infer<typeof analysisResultSchema>;
 
@@ -151,6 +163,13 @@ export const progressSchema = z
       .object({ product_id: z.string(), name: z.string().nullish(), image_url: z.string().nullish() })
       .optional(),
     updated_at: z.string().optional(),
+    started_at: z.string().optional(),
+    /** 수집기 실행 단계: browser → open_page → page_loaded → summary → (별점별) → saved, 또는 reuse */
+    crawl_stage: z.string().optional(),
+    from_saved_file: z.boolean().optional(),
+    total_reviews: z.number().nullish(),
+    detection_available: z.boolean().optional(),
+    logs: z.array(z.object({ at: z.string().optional(), message: z.string() })).optional(),
   })
   .passthrough();
 export type Progress = z.infer<typeof progressSchema>;
@@ -191,6 +210,46 @@ export const analysisViewSchema = z.object({
   demo: z.boolean().optional(),
 });
 export type AnalysisView = z.infer<typeof analysisViewSchema>;
+
+export const productSummarySchema = z.object({
+  product_id: z.string(),
+  name: z.string().nullish(),
+  image_url: z.string().nullish(),
+  url: z.string().nullish(),
+  total_reviews: z.number().nullish(),
+  collected_reviews: z.number().nullish(),
+  collected_at: z.string().nullish(),
+  complete: z.boolean().default(true),
+  avg_all: z.number().nullish(),
+  analysis_id: z.string().nullish(),
+  source: z.string().nullish(),
+});
+export type ProductSummary = z.infer<typeof productSummarySchema>;
+export const productListSchema = z.object({ items: z.array(productSummarySchema).default([]) });
+
+export const reviewItemSchema = z.object({
+  review_id: z.string(),
+  star: z.number(),
+  title: z.string().nullish(),
+  content: z.string(),
+  created_at: z.string().nullish(),
+  has_photo: z.boolean().default(false),
+  option_name: z.string().nullish(),
+  len_chars: z.number().default(0),
+  is_sponsored: z.boolean().default(false),
+  label: z.string().nullish(),
+  p_ai: z.number().nullish(),
+});
+export type ReviewItem = z.infer<typeof reviewItemSchema>;
+export const reviewPageSchema = z.object({
+  product_id: z.string(),
+  star: z.number().nullish(),
+  total: z.number(),
+  offset: z.number(),
+  limit: z.number(),
+  items: z.array(reviewItemSchema),
+});
+export type ReviewPage = z.infer<typeof reviewPageSchema>;
 
 export const apiErrorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 

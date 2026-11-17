@@ -52,3 +52,31 @@ def test_collect_stops_on_block(tmp_path: Path) -> None:
     r = run("collect", str(products), "--out", str(tmp_path / "out"), env={"FAKE_COUPANG_BLOCK": "1"})
     assert r.returncode == 2 and "막았어요" in r.stdout
     assert not (tmp_path / "out" / "_state.json").exists()
+
+
+def test_category_mode_skips_products_without_old_reviews(tmp_path: Path) -> None:
+    html = tmp_path / "list.html"
+    html.write_text(
+        '<li><a href="/vp/products/3000000001?itemId=1"><img alt="오래된 상품"></a></li>'
+        '<li><a href="/vp/products/3000000002"><div class="name">신상품</div></a></li>'
+        '<a href="/np/categories/9">다른 카테고리</a>', encoding="utf-8")
+    cats = tmp_path / "cats.txt"
+    cats.write_text("## 주방\nhttps://www.coupang.com/np/categories/111111\n", encoding="utf-8")
+    env = {
+        "FAKE_COUPANG_SEARCH": str(html),
+        "FAKE_COUPANG_COUNTS_BY_PID": json.dumps({
+            "3000000001": {"5": 2000, "4": 600, "3": 1600, "2": 300, "1": 1500},
+            "3000000002": {"5": 200, "4": 30, "3": 10, "2": 3, "1": 5},
+        }),
+    }
+    out = tmp_path / "out"
+    r = run("category", str(cats), "--out", str(out), "--per-product", "25", env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rows = [json.loads(line) for f in out.glob("*.jsonl") for line in f.read_text(encoding="utf-8").splitlines()]
+    assert {x["product_id"] for x in rows} == {"3000000001"} and len(rows) == 25  # 상품당 최대 25개
+    assert all(x["period"] == "pre_chatgpt" and x["category"] == "주방" for x in rows)
+    assert {x["star"] for x in rows} >= {1, 3, 5}  # 적은 별점부터 몫을 나눠 담는다
+    state = json.loads((out / "_state.json").read_text(encoding="utf-8"))
+    assert state["products"]["3000000002"]["status"] == "no_old"
+    r2 = run("category", str(cats), "--out", str(out), env=env)  # 이어서: 목록·확인 결과 재사용
+    assert "이번에 0개" in r2.stdout

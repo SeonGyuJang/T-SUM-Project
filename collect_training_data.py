@@ -18,6 +18,8 @@ model/MODEL_DEV.md 4.2(데이터 설계)의 원천 데이터를 모은다.
 사용법 (coupang_reviews.py와 같은 파이썬·같은 폴더에서)
   python collect_training_data.py naver                              # 네이버 쇼핑 데이터 받기·변환
   python collect_training_data.py inspect "<쿠팡 상품 URL>"          # 날짜순 정렬·페이지 이동 점검 (먼저 한 번)
+  python collect_training_data.py category training_categories.txt   # 카테고리 안 상품을 전부 돌며 과거 리뷰가 있으면 수집
+  python collect_training_data.py category "https://www.coupang.com/np/categories/194276" --name 식품
   python collect_training_data.py collect training_products.txt      # 상품 목록 수집 (중단 후 다시 실행하면 이어서)
   python collect_training_data.py collect training_products.txt --per-star 30 --post-per-star 10
   python collect_training_data.py stats                              # 모인 양 보기
@@ -60,6 +62,10 @@ FALLBACK_PAGES = 8                # 날짜순이 안 될 때 기본 정렬로 �
 PAGE_ATTEMPTS = 3
 PAGE_BACKOFF = (5, 20)            # 재시도 전 대기(초)
 PRODUCT_DELAY = (8.0, 15.0)       # 상품 사이 대기(초) — 서비스 수집보다 느리게
+SKIP_DELAY = (3.0, 6.0)           # 과거 리뷰가 없어 건너뛴 상품 뒤 대기(초)
+PER_PRODUCT = 40                  # 카테고리 모드: 상품당 최대 리뷰 수 (한 상품 과대표집·과적합 방지)
+LIST_PAGES = 10                   # 카테고리 모드: 상품 목록을 넘겨 볼 최대 페이지 수
+LIST_SIZE = 60                    # 카테고리 목록 한 페이지 상품 수 (쿠팡 listSize)
 SCRAPER_VERSION = "collect_training_data/1"
 
 ROOT = Path(__file__).resolve().parent
@@ -164,7 +170,7 @@ def save_state(out_dir: Path, state: dict[str, Any]) -> None:
 class ReviewPager:
     """한 상품·한 별점의 리뷰 페이지를 요청한다. 같은 페이지는 다시 요청하지 않는다."""
 
-    def __init__(self, cr: Any, page: Any, pid: str, star: int, sort: str, log: Any) -> None:
+    def __init__(self, cr: Any, page: Any, pid: str, star: int | None, sort: str, log: Any) -> None:
         self.cr, self.page, self.pid, self.star, self.sort, self.log = cr, page, pid, star, sort, log
         self.cache: dict[int, list[dict[str, Any]]] = {}
         self.raw_first: Any = None
@@ -173,7 +179,7 @@ class ReviewPager:
     def url(self, page_no: int) -> str:
         return self.cr.API_BASE + "?" + urlencode({
             "productId": self.pid, "page": page_no, "size": self.cr.PAGE_SIZE, "sortBy": self.sort,
-            "ratingSummary": "true", "ratings": str(self.star), "market": "",
+            "ratingSummary": "true", "ratings": "" if self.star is None else str(self.star), "market": "",
         })
 
     def get(self, page_no: int) -> list[dict[str, Any]]:
@@ -191,7 +197,7 @@ class ReviewPager:
                 if ("403" in last_err or "JSON이 아닌" in last_err) and attempt == PAGE_ATTEMPTS:
                     raise Blocked(last_err) from e
                 wait = PAGE_BACKOFF[min(attempt - 1, len(PAGE_BACKOFF) - 1)]
-                self.log(f"      ↻ {self.star}점 {page_no}페이지 {last_err[:60]} → {wait}초 후 재시도")
+                self.log(f"      ↻ {self.star or '전체'}{'점' if self.star else ''} {page_no}페이지 {last_err[:60]} → {wait}초 후 재시도")
                 self.page.wait_for_timeout(wait * 1000)
                 continue
             items = self.cr.find_review_list(data)
@@ -433,6 +439,257 @@ def cmd_collect(args: argparse.Namespace) -> int:
     return 0
 
 
+# ──────────────────────────────────────────────────────────────
+# 카테고리 모드: 카테고리 목록 → 상품마다 과거 리뷰 확인 → 있으면 수집
+# ──────────────────────────────────────────────────────────────
+_PID_RE = re.compile(r"/vp/products/(\d+)")
+
+
+def parse_listing(html: str) -> list[dict[str, str]]:
+    """카테고리·검색 목록 HTML에서 상품 링크를 모은다(화면 클래스 이름에 기대지 않는다)."""
+    from html.parser import HTMLParser
+
+    found: dict[str, dict[str, str]] = {}
+
+    class P(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.cur: dict[str, Any] | None = None
+            self.depth = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            a = {k: (v or "") for k, v in attrs}
+            if self.cur is None:
+                if tag == "a" and _PID_RE.search(a.get("href", "")):
+                    self.cur, self.depth = {"href": a["href"], "texts": [], "alt": ""}, 0
+                return
+            if tag == "img" and not self.cur["alt"]:
+                self.cur["alt"] = a.get("alt", "")
+            if tag not in ("img", "br", "input", "source", "meta", "link", "hr", "wbr"):
+                self.depth += 1
+
+        def handle_endtag(self, tag: str) -> None:
+            if self.cur is None:
+                return
+            if tag == "a" and self.depth == 0:
+                href = self.cur["href"]
+                pid = _PID_RE.search(href).group(1)  # type: ignore[union-attr]
+                texts = [t for t in self.cur["texts"] if not re.fullmatch(r"[\d,.()원%\s]+", t)]
+                name = self.cur["alt"] or (max(texts, key=len) if texts else "")
+                if pid not in found:
+                    url = href if href.startswith("http") else "https://www.coupang.com" + href
+                    found[pid] = {"product_id": pid, "url": url, "name": name.strip()}
+                self.cur = None
+            elif tag not in ("img", "br", "input", "source", "meta", "link", "hr", "wbr"):
+                self.depth = max(0, self.depth - 1)
+
+        def handle_data(self, data: str) -> None:
+            if self.cur is not None and data.strip():
+                self.cur["texts"].append(data.strip())
+
+    P().feed(html)
+    return list(found.values())
+
+
+def listing_url(base: str, page_no: int) -> str:
+    from urllib.parse import parse_qsl, urlparse, urlunparse
+
+    u = urlparse(base)
+    q = dict(parse_qsl(u.query))
+    q["page"] = str(page_no)
+    if "/np/categories/" in u.path:
+        q.setdefault("listSize", str(LIST_SIZE))
+    return urlunparse(u._replace(query=urlencode(q)))
+
+
+def list_category(cr: Any, session: Any, url: str, max_pages: int) -> list[dict[str, str]]:
+    """카테고리(또는 검색 결과) 목록을 넘기며 상품 링크를 모은다. 새 상품이 안 나오면 멈춘다."""
+    products: dict[str, dict[str, str]] = {}
+    for page_no in range(1, max_pages + 1):
+        box: dict[str, Any] = {}
+
+        def action(page: Any, _box: dict[str, Any] = box) -> Any:
+            try:
+                cr.warm_up(page)
+                _box["html"] = page.content()
+            except Exception as e:
+                _box["error"] = e
+            return page
+
+        resp = session.fetch(listing_url(url, page_no), page_action=action)
+        if getattr(resp, "status", 200) != 200:
+            raise Blocked(f"카테고리 목록 HTTP {resp.status}")
+        html = box.get("html") or ""
+        if "Access Denied" in html[:30000] or "사용권한이 없습니다" in html[:30000]:
+            raise Blocked("카테고리 목록 접근 거부")
+        new = [p for p in parse_listing(html) if p["product_id"] not in products]
+        print(f"  목록 {page_no}페이지: 새 상품 {len(new)}개", flush=True)
+        if not new:
+            break
+        for p in new:
+            products[p["product_id"]] = p
+        time.sleep(random.uniform(*SKIP_DELAY))
+    return list(products.values())
+
+
+def old_review_check(cr: Any, page: Any, pid: str, log: Any) -> dict[str, Any]:
+    """전체 별점·최신순으로 첫 페이지와 마지막 페이지만 보고 2022-11-30 이전 리뷰가 있는지 판단한다(요청 2~4회)."""
+    pager = ReviewPager(cr, page, pid, None, DATE_SORT, log)
+    first = pager.get(1)
+    if not first:
+        return {"has_old": False, "reason": "리뷰 없음", "requests": pager.requests}
+    total = pager.total() or len(first)
+    last = max(1, math.ceil(total / cr.PAGE_SIZE))
+    if not is_desc(first):
+        return {"has_old": True, "reason": "최신순 정렬 불가 → 별점별로 확인", "total": total, "requests": pager.requests}
+    reach = last
+    while reach > 1 and not pager.get(reach):
+        reach //= 2
+    oldest = pager.oldest(reach)
+    capped = reach < last
+    info = {"total": total, "oldest": oldest.isoformat() if oldest else None, "capped": capped, "requests": pager.requests}
+    if oldest is not None and oldest < CUTOFF:
+        return {"has_old": True, "reason": f"가장 오래된 리뷰 {oldest}", **info}
+    if capped:
+        return {"has_old": True, "reason": f"{reach}/{last}페이지까지만 열림 → 별점별로 확인", **info}
+    return {"has_old": False, "reason": f"가장 오래된 리뷰 {oldest}", **info}
+
+
+def check_and_collect(cr: Any, session: Any, item: dict[str, str], per_product: int, post_per_star: int) -> dict[str, Any]:
+    pid = item["product_id"]
+    box: dict[str, Any] = {"stars": {}, "name": item.get("name") or ""}
+
+    def log(msg: str) -> None:
+        print(msg, flush=True)
+
+    def action(page: Any) -> Any:
+        try:
+            try:
+                title = page.evaluate("() => document.querySelector('meta[property=\"og:title\"]')?.content || document.title || ''")
+            except Exception:
+                title = ""
+            if isinstance(title, dict):
+                title = title.get("title") or ""
+            if isinstance(title, str) and title:
+                box["name"] = cr.clean_product_name(title)
+            chk = old_review_check(cr, page, pid, log)
+            box["check"] = chk
+            if not chk["has_old"]:
+                return page
+            cr.warm_up(page)
+            remaining = per_product
+            for idx, star in enumerate((1, 2, 3, 4, 5)):  # 적은 별점부터: 남는 몫을 다음 별점이 가져간다
+                if remaining <= 0:
+                    break
+                quota = math.ceil(remaining / (5 - idx))
+                res = collect_star(cr, page, pid, star, quota, post_per_star, log)
+                box["stars"][star] = res
+                remaining -= len(res["pre"])
+                log(f"    {star}점: 이전 {len(res['pre'])}/{quota}" + (f" · 이후 {len(res['post'])}" if post_per_star else "")
+                    + f"  (요청 {res['requests']}회)")
+        except Exception as e:
+            box["error"] = e
+        return page
+
+    resp = session.fetch(item["url"], page_action=action)
+    if getattr(resp, "status", 200) != 200:
+        raise Blocked(f"상품 페이지 HTTP {resp.status}")
+    if "error" in box:
+        raise box["error"]
+    return box
+
+
+def read_categories(args_targets: list[str], name: str) -> list[dict[str, str]]:
+    """인자로 받은 카테고리 URL들, 또는 '## 이름' + URL 형식의 txt 파일."""
+    out: list[dict[str, str]] = []
+    for t in args_targets:
+        path = Path(t)
+        if path.exists() and not t.startswith("http"):
+            current = ""
+            for raw in path.read_text(encoding="utf-8-sig").splitlines():
+                line = raw.strip()
+                if line.startswith("##"):
+                    current = line.lstrip("#").strip()
+                elif line.startswith("http"):
+                    out.append({"name": current or name, "url": line.split()[0]})
+        elif t.startswith("http"):
+            out.append({"name": name, "url": t})
+        else:
+            print(f"  ⚠ 카테고리 주소나 파일이 아님: {t}")
+    return out
+
+
+def cmd_category(args: argparse.Namespace) -> int:
+    cr = load_crawler()
+    out_dir = Path(args.out) if args.out else OUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cats = read_categories(args.targets, args.name)
+    if not cats:
+        print("수집할 카테고리가 없습니다.")
+        return 1
+    state = load_state(out_dir)
+    state.setdefault("categories", {})
+    out_file = out_dir / f"{datetime.now(KST):%Y%m%d_%H%M%S}.jsonl"
+    totals = Counter()  # type: Counter[str]
+    print(f"카테고리 {len(cats)}개 · 상품당 최대 {args.per_product}개 · 기준일 {CUTOFF} 이전 · 목록 최대 {args.max_list_pages}페이지")
+    try:
+        with cr.open_session(headless=args.headless) as session:
+            for cat in cats:
+                key = cat["url"]
+                cached = state["categories"].get(key)
+                print(f"\n▶ 카테고리 [{cat['name'] or '이름 없음'}] {key}")
+                if cached and cached.get("products") and not args.relist:
+                    products = cached["products"]
+                    print(f"  저장된 상품 목록 {len(products)}개 사용 (--relist 로 다시 읽기)")
+                else:
+                    products = list_category(cr, session, key, args.max_list_pages)
+                    state["categories"][key] = {"name": cat["name"], "products": products, "listed_at": now_iso()}
+                    save_state(out_dir, state)
+                todo = [p for p in products if not state["products"].get(p["product_id"], {}).get("done")]
+                if args.max_products:
+                    todo = todo[: args.max_products]
+                print(f"  상품 {len(products)}개 / 확인 끝 {len(products) - len(todo)}개 / 이번에 {len(todo)}개")
+                for n, item in enumerate(todo, 1):
+                    item = {**item, "category": cat["name"]}
+                    print(f"  [{n}/{len(todo)}] {item['product_id']} {item.get('name', '')[:30]}", flush=True)
+                    box = check_and_collect(cr, session, item, args.per_product, args.post_per_star)
+                    chk = box.get("check", {})
+                    collected_at = now_iso()
+                    rows = []
+                    for star in STARS:
+                        res = box["stars"].get(star) or {"pre": [], "post": []}
+                        rows += [to_record(r, item["product_id"], box["name"], cat["name"], collected_at) for r in res["pre"] + res["post"]]
+                    if rows:
+                        with out_file.open("a", encoding="utf-8") as f:
+                            for row in rows:
+                                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    pre = sum(1 for r in rows if r["period"] == "pre_chatgpt")
+                    status = "collected" if pre else "no_old"
+                    totals[status] += 1
+                    totals["reviews"] += pre
+                    state["products"][item["product_id"]] = {
+                        "done": True, "status": status, "name": box["name"], "category": cat["name"], "pre": pre,
+                        "post": sum(1 for r in rows if r["period"] == "post_chatgpt"),
+                        "per_star": {str(s): len((box["stars"].get(s) or {}).get("pre", [])) for s in STARS},
+                        "check": {k: v for k, v in chk.items() if k != "has_old"},
+                        "file": out_file.name if rows else None, "at": collected_at,
+                    }
+                    save_state(out_dir, state)
+                    if pre:
+                        print(f"    ✓ 이전 리뷰 {pre}건 수집 ({chk.get('reason', '')})", flush=True)
+                    else:
+                        print(f"    – 건너뜀: {chk.get('reason', '과거 리뷰 없음')}", flush=True)
+                    if n < len(todo):
+                        time.sleep(random.uniform(*(PRODUCT_DELAY if pre else SKIP_DELAY)))
+    except Blocked as e:
+        print(f"\n⛔ 쿠팡이 자동 접근을 막았어요: {e}\n   여기서 멈춥니다(우회하지 않음). 나중에 같은 명령을 다시 실행하면 이어서 해요.")
+        print(f"   이번 실행: 수집 {totals['collected']}개 상품·리뷰 {totals['reviews']}건, 건너뜀 {totals['no_old']}개")
+        return 2
+    print(f"\n완료: 수집 {totals['collected']}개 상품·리뷰 {totals['reviews']}건, 과거 리뷰 없어 건너뜀 {totals['no_old']}개 → {out_file}")
+    return 0
+
+
+
 def cmd_inspect(args: argparse.Namespace) -> int:
     """상품 하나로 날짜순 정렬·페이지 이동·이진 탐색이 되는지 확인한다(저장하지 않음)."""
     cr = load_crawler()
@@ -568,6 +825,14 @@ def cmd_stats(args: argparse.Namespace) -> int:
             r = json.loads(line)
             nv[(int(r["star"]), r["length_bucket"])] += 1
         print_table("네이버 쇼핑 (H2 · 사람 후보)", nv)
+    st = load_state(out_dir)
+    if st.get("products"):
+        per_cat: dict[str, Counter[str]] = defaultdict(Counter)
+        for info in st["products"].values():
+            per_cat[info.get("category") or "(미지정)"][info.get("status") or ("collected" if info.get("pre") else "no_old")] += 1
+        print("\n[확인한 상품] 카테고리: 수집 / 과거 리뷰 없어 건너뜀")
+        for cat, c in sorted(per_cat.items()):
+            print(f"  {cat}: {c['collected']} / {c['no_old']}")
     h1 = sum(pre.values())
     print(f"\n목표(MODEL_DEV.md 4.2.2): H1 쿠팡 이전 리뷰 {h1:,} / 15,000 ({h1 / 150:.0f}%)"
           f" · H2 네이버는 사람 데이터의 40% 이하로만 사용 (보유 {sum(nv.values()):,})")
@@ -587,6 +852,15 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--post-per-star", type=int, default=POST_PER_STAR, help=f"상품·별점당 2023년 이후 리뷰 수 (기본 {POST_PER_STAR}, 0=안 함)")
     c.add_argument("--max-products", type=int, default=0, help="이번 실행에서 수집할 최대 상품 수")
     c.add_argument("--headless", action="store_true", help="브라우저 창 숨기기 (차단이 늘 수 있음)")
+    g = sub.add_parser("category", help="카테고리 안 상품을 돌며 과거 리뷰가 있으면 수집")
+    g.add_argument("targets", nargs="+", help="카테고리 URL(여러 개 가능) 또는 '## 이름' + URL 형식 txt 파일")
+    g.add_argument("--name", default="", help="URL로 줄 때 카테고리 이름")
+    g.add_argument("--per-product", type=int, default=PER_PRODUCT, help=f"상품당 최대 리뷰 수 (기본 {PER_PRODUCT})")
+    g.add_argument("--post-per-star", type=int, default=0, help="상품·별점당 2023년 이후 리뷰 수 (기본 0=안 함)")
+    g.add_argument("--max-list-pages", type=int, default=LIST_PAGES, help=f"목록을 넘겨 볼 최대 페이지 (기본 {LIST_PAGES})")
+    g.add_argument("--max-products", type=int, default=0, help="카테고리마다 이번에 확인할 최대 상품 수")
+    g.add_argument("--relist", action="store_true", help="저장된 상품 목록을 무시하고 목록을 다시 읽기")
+    g.add_argument("--headless", action="store_true", help="브라우저 창 숨기기 (차단이 늘 수 있음)")
     i = sub.add_parser("inspect", help="상품 하나로 날짜순 정렬·이진 탐색 점검")
     i.add_argument("url")
     i.add_argument("--star", type=int, default=5)
@@ -594,12 +868,13 @@ def main(argv: list[str] | None = None) -> int:
     n = sub.add_parser("naver", help="네이버 쇼핑 리뷰 20만 건 내려받기·변환")
     n.add_argument("--force", action="store_true", help="이미 받은 파일이 있어도 다시 받기")
     sub.add_parser("stats", help="모인 데이터 양 보기")
-    for p in (c, n, sub.choices["stats"]):
+    for p in (c, g, n, sub.choices["stats"]):
         p.add_argument("--out", default="", help="결과 폴더 (기본 model/data/raw/…)")
     ap.add_argument("--cutoff", default=CUTOFF.isoformat(), help="사람 리뷰 기준일 (기본 2022-11-30)")
     args = ap.parse_args(argv)
     CUTOFF = date.fromisoformat(args.cutoff)
-    return {"collect": cmd_collect, "inspect": cmd_inspect, "naver": cmd_naver, "stats": cmd_stats}[args.cmd](args)
+    cmds = {"collect": cmd_collect, "category": cmd_category, "inspect": cmd_inspect, "naver": cmd_naver, "stats": cmd_stats}
+    return cmds[args.cmd](args)
 
 
 if __name__ == "__main__":

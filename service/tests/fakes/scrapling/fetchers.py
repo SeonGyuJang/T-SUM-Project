@@ -5,6 +5,7 @@
   FAKE_COUPANG_BLOCK   "1"이면 상품 페이지가 HTTP 403
   FAKE_COUPANG_SEARCH  검색 결과 HTML 파일 경로
   FAKE_COUPANG_CRASH   값이 있으면 리뷰 API 호출 때 그 문구로 예외
+  FAKE_COUPANG_MAX_PAGE  이 페이지를 넘으면 빈 목록 (쿠팡 페이지 상한 흉내)
   FAKE_COUPANG_DELAY   API 응답마다 기다릴 초 (진행 화면 확인용, 기본 0)
 """
 
@@ -80,7 +81,8 @@ class FakePage:
             pool = [_review(self.pid, star, i) for i in range(counts.get(star, 0))]
         else:
             pool = [_review(self.pid, s, i) for s in (5, 4, 3, 2, 1) for i in range(counts.get(s, 0))]
-        items = pool[(page - 1) * size: page * size]
+        max_page = int(os.environ.get("FAKE_COUPANG_MAX_PAGE") or 0)
+        items = [] if max_page and page > max_page else pool[(page - 1) * size: page * size]
         body = {
             "rCode": "RET0000",
             "rData": {

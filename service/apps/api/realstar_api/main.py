@@ -71,6 +71,8 @@ def _startup_banner(settings: Settings) -> None:
         lines.append(f"  수집기 파이썬 : {c['python']}")
         fix = '없음! → 이 파이썬에 pip install "scrapling[fetchers]" 또는 .env의 CRAWLER_PYTHON 지정'
         lines.append("  scrapling     : " + ("설치됨" if c["scrapling_installed"] else fix))
+        if c.get("browser_installed") is not None:
+            lines.append("  수집용 브라우저: " + ("설치됨" if c["browser_installed"] else "없음!"))
         lines.append(f"  수집 결과 폴더: {settings.crawler_output_dir}")
         if c.get("problem"):
             lines.append(f"  ⚠ {c['problem']}")

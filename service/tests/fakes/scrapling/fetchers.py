@@ -117,6 +117,8 @@ class StealthySession:
         self.kw = kw
 
     def __enter__(self) -> StealthySession:
+        if os.environ.get("FAKE_COUPANG_LAUNCH_ERROR"):
+            raise RuntimeError(os.environ["FAKE_COUPANG_LAUNCH_ERROR"])
         return self
 
     def __exit__(self, *_: Any) -> None:

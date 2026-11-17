@@ -187,6 +187,15 @@ def summary_of_file(path: Path) -> dict[str, Any] | None:
     }
 
 
+def _browser_missing(msg: str) -> bool:
+    return "Executable doesn't exist" in msg or "playwright install" in msg or "patchright install" in msg
+
+
+def browser_install_hint(python: str) -> str:
+    return (f"수집용 브라우저(Chromium)가 설치되지 않았어요. 서버 PC 터미널에서 "
+            f"`{python} -m patchright install chromium` (또는 `scrapling install`)을 실행한 뒤 다시 시도해 주세요.")
+
+
 def _echo(msg: str) -> None:
     """서버(uvicorn) 터미널에 수집기 출력을 보여 준다."""
     if msg:
@@ -312,6 +321,8 @@ class CrawlerProvider:
             raise CrawlerFailedError(f"수집기가 결과 없이 종료됐어요(코드 {proc.returncode}): {last}")
         if final.get("type") == "error":
             msg = str(final.get("message") or "")
+            if _browser_missing(msg):
+                raise CrawlerUnavailableError(msg[:300], user_message=browser_install_hint(self._python()))
             if final.get("kind") == "blocked":
                 raise BlockedError("crawler", msg)
             if final.get("kind") == "setup":
@@ -432,9 +443,23 @@ def check_crawler(settings: Settings, *, refresh: bool = False) -> dict[str, Any
             out["problem"] = (r.stderr.strip().splitlines() or ["import 실패"])[-1][:300]
     except (OSError, subprocess.TimeoutExpired) as e:
         out["problem"] = f"파이썬 실행 실패: {e}"
+    if out["scrapling_installed"]:
+        probe = ("import os,sys\n"
+                 "from patchright.sync_api import sync_playwright\n"
+                 "with sync_playwright() as p:\n"
+                 "    print('OK' if os.path.exists(p.chromium.executable_path) else 'MISSING')\n")
+        try:
+            r = subprocess.run([python, "-c", probe], capture_output=True, text=True, timeout=60)
+            if "MISSING" in r.stdout:
+                out["browser_installed"] = False
+                out["problem"] = browser_install_hint(python)
+            elif "OK" in r.stdout:
+                out["browser_installed"] = True
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     if not out["script_found"]:
         out["problem"] = f"수집기 파일이 없음: {script}"
-    out["ok"] = out["script_found"] and out["scrapling_installed"]
+    out["ok"] = out["script_found"] and out["scrapling_installed"] and out.get("browser_installed") is not False
     _CHECK_CACHE[key] = out
     return out
 

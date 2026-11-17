@@ -168,3 +168,11 @@ def test_crawler_crash_shows_reason(crawler_settings: Settings, monkeypatch: pyt
     assert v["error"]["message"].startswith("리뷰를 수집하지 못했어요: 요약 정보를 가져오지 못함")
     log_file = crawler_settings.crawler_output_dir / "raw" / "debug" / "crawler_last.log"
     assert "browser has been closed" in log_file.read_text(encoding="utf-8")
+
+
+def test_missing_browser_gives_install_command(crawler_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKE_COUPANG_LAUNCH_ERROR", "BrowserType.launch_persistent_context: Executable doesn't exist at /x/chromium-1248/chrome")
+    svc, disp, _ = make(crawler_settings, NoDetectorBackend())
+    v = run(svc, disp)
+    assert v["status"] == "failed" and v["error"]["code"] == "crawler_unavailable"
+    assert "patchright install chromium" in v["error"]["message"]

@@ -19,7 +19,14 @@ from realstar.state.store import LocalStateStore
 from tests.browser import mock_site
 
 pytestmark = pytest.mark.browser
-CHROME = os.environ.get("SCRAPER_CHROME_BINARY") or shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chrome")
+MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+CHROME = (
+    os.environ.get("SCRAPER_CHROME_BINARY")
+    or shutil.which("google-chrome")
+    or shutil.which("chromium")
+    or shutil.which("chrome")
+    or (MAC_CHROME if Path(MAC_CHROME).exists() else None)
+)
 if not CHROME:
     pytest.skip("Chrome 없음", allow_module_level=True)
 

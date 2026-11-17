@@ -50,18 +50,56 @@ def sanitize_html(html: str, selectors: Selectors) -> str:
     return str(soup)
 
 
+# 모든 문서의 스크립트보다 먼저 실행: Selenium이 남기는 navigator.webdriver 표식을 일반 브라우저와 같게 만든다.
+HIDE_WEBDRIVER_JS = "Object.defineProperty(Navigator.prototype, 'webdriver', {get: () => undefined});"
+DEFAULT_ACCEPT_LANGUAGE = "ko-KR,ko;q=0.9"
+
+
+def split_accept_language(headers: dict[str, str]) -> tuple[str | None, dict[str, str]]:
+    """Accept-Language는 요청마다 덧붙이지 않고 Chrome 언어 설정으로 넘긴다. 나머지 헤더는 그대로 돌려준다."""
+    rest = dict(headers)
+    for name in list(rest):
+        if name.lower() == "accept-language":
+            return rest.pop(name), rest
+    return None, rest
+
+
+def chrome_language_pref(accept_language: str) -> str:
+    """'ko-KR,ko;q=0.9' → 'ko-KR,ko' (Chrome의 intl.accept_languages 형식, q 값은 Chrome이 붙인다)."""
+    langs = [part.split(";")[0].strip() for part in accept_language.split(",")]
+    return ",".join(lang for lang in langs if lang)
+
+
 def default_driver_factory(settings: Settings) -> DriverLike:
-    """Selenium 4 + Selenium Manager로 Chrome을 띄우고 선택적 요청 헤더를 적용한다."""
+    """Selenium 4 + Selenium Manager로 Chrome을 띄운다.
+
+    ChromeDriver가 붙이는 자동화 표식(자동화 배너 스위치, AutomationControlled, navigator.webdriver,
+    헤드리스 UA의 "HeadlessChrome")을 없애 일반 Chrome과 같은 환경으로 맞추고, 선택적 요청 헤더를 적용한다.
+    """
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
 
     options = webdriver.ChromeOptions()
+    # 자동화 표식 제거
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    # UA는 설정했을 때만 덮어쓴다. 비워 두면 설치된 Chrome의 실제 UA가 쓰여 sec-ch-ua와 버전이 어긋나지 않는다.
     if settings.scraper_user_agent:
         options.add_argument(f"--user-agent={settings.scraper_user_agent}")
     if settings.scraper_headless:
         options.add_argument("--headless=new")
     options.add_argument("--window-size=1366,900")
     options.add_argument("--lang=ko-KR")
+    # 언어는 CDP로 헤더를 덧붙이지 않고 Chrome 설정으로 지정한다(macOS는 --lang을 무시한다).
+    # CDP 추가 헤더는 헤더 순서·대소문자가 일반 Chrome과 달라져 첫 요청에서 차단될 수 있다.
+    accept_language, extra_headers = split_accept_language(settings.scraper_custom_headers)
+    options.add_experimental_option(
+        "prefs", {"intl.accept_languages": chrome_language_pref(accept_language or DEFAULT_ACCEPT_LANGUAGE)}
+    )
+    # 전용 프로필 디렉터리: 쿠키가 유지돼 매번 처음 온 방문자처럼 보이지 않는다(평소 쓰는 Chrome 프로필과 분리).
+    if settings.scraper_user_data_dir:
+        options.add_argument(f"--user-data-dir={settings.scraper_user_data_dir}")
     if settings.scraper_chrome_container:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
@@ -70,12 +108,22 @@ def default_driver_factory(settings: Settings) -> DriverLike:
     service = Service(executable_path=settings.scraper_chromedriver_path) if settings.scraper_chromedriver_path else Service()
     driver = webdriver.Chrome(options=options, service=service)
     driver.set_page_load_timeout(settings.scraper_page_load_timeout_sec)
-    if settings.scraper_custom_headers:
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": HIDE_WEBDRIVER_JS})
+    # 헤드리스 Chrome은 기본 UA에 "HeadlessChrome"을 넣으므로 일반 Chrome 표기로 바꾼다.
+    if settings.scraper_headless and not settings.scraper_user_agent:
+        version = driver.execute_cdp_cmd("Browser.getVersion", {}) or {}
+        ua = str(version.get("userAgent", ""))
+        if "HeadlessChrome" in ua:
+            driver.execute_cdp_cmd(
+                "Network.setUserAgentOverride",
+                {
+                    "userAgent": ua.replace("HeadlessChrome", "Chrome"),
+                    "acceptLanguage": accept_language or DEFAULT_ACCEPT_LANGUAGE,
+                },
+            )
+    if extra_headers:
         driver.execute_cdp_cmd("Network.enable", {})
-        driver.execute_cdp_cmd(
-            "Network.setExtraHTTPHeaders",
-            {"headers": settings.scraper_custom_headers},
-        )
+        driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {"headers": extra_headers})
     return driver  # type: ignore[return-value]
 
 

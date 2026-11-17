@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import pytest
 
-from realstar.collectors.coupang.browser import BrowserSession, default_driver_factory
+from realstar.collectors.coupang.browser import HIDE_WEBDRIVER_JS, BrowserSession, default_driver_factory
 from realstar.collectors.coupang.provider import CoupangScraperProvider
 from realstar.collectors.coupang.selectors import Selectors, load_selectors
 from realstar.config import Settings
@@ -17,64 +18,153 @@ from tests.fakes import FakeCoupangSite
 COUNTS = {5: 12, 4: 7, 3: 0, 2: 3, 1: 1}
 
 
-def test_default_driver_factory_applies_configured_headers(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+class FakeOptions:
+    def __init__(self) -> None:
+        self.arguments: list[str] = []
+        self.experimental: dict[str, object] = {}
+        self.binary_location: str | None = None
+
+    def add_argument(self, argument: str) -> None:
+        self.arguments.append(argument)
+
+    def add_experimental_option(self, name: str, value: object) -> None:
+        self.experimental[name] = value
+
+
+class FakeDriver:
+    def __init__(self, user_agent: str = "Mozilla/5.0 Chrome/131.0.0.0 Safari/537.36") -> None:
+        self.commands: list[tuple[str, dict[str, object]]] = []
+        self.timeout: float | None = None
+        self._user_agent = user_agent
+
+    def execute_cdp_cmd(self, command: str, parameters: dict[str, object]) -> dict[str, object]:
+        self.commands.append((command, parameters))
+        if command == "Browser.getVersion":
+            return {"userAgent": self._user_agent}
+        return {}
+
+    def set_page_load_timeout(self, seconds: float) -> None:
+        self.timeout = seconds
+
+
+def patch_selenium(monkeypatch: pytest.MonkeyPatch, driver: FakeDriver) -> dict[str, object]:
     from selenium import webdriver
     from selenium.webdriver.chrome import service as chrome_service
 
-    class FakeOptions:
-        def __init__(self) -> None:
-            self.arguments: list[str] = []
-
-        def add_argument(self, argument: str) -> None:
-            self.arguments.append(argument)
-
-    class FakeDriver:
-        def __init__(self) -> None:
-            self.commands: list[tuple[str, dict[str, object]]] = []
-            self.timeout: float | None = None
-
-        def execute_cdp_cmd(self, command: str, parameters: dict[str, object]) -> None:
-            self.commands.append((command, parameters))
-
-        def set_page_load_timeout(self, seconds: float) -> None:
-            self.timeout = seconds
-
-    driver = FakeDriver()
-    options: FakeOptions | None = None
-    service_options: dict[str, object] = {}
-    driver_options: dict[str, object] = {}
+    captured: dict[str, object] = {}
 
     def create_options() -> FakeOptions:
-        nonlocal options
-        options = FakeOptions()
-        return options
+        captured["options"] = FakeOptions()
+        return captured["options"]  # type: ignore[return-value]
 
     def create_driver(**kwargs: object) -> FakeDriver:
-        driver_options.update(kwargs)
+        captured["driver_kwargs"] = kwargs
         return driver
 
     def create_service(**kwargs: object) -> object:
-        service_options.update(kwargs)
+        captured["service_kwargs"] = kwargs
         return object()
 
     monkeypatch.setattr(webdriver, "ChromeOptions", create_options)
     monkeypatch.setattr(webdriver, "Chrome", create_driver)
     monkeypatch.setattr(chrome_service, "Service", create_service)
+    return captured
+
+
+def test_default_driver_factory_applies_configured_headers(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = FakeDriver()
+    captured = patch_selenium(monkeypatch, driver)
     configured = settings.model_copy(update={
         "scraper_user_agent": "TestBrowser/1.0",
         "scraper_custom_headers": {"X-Client": "realstar-test"},
     })
 
     assert default_driver_factory(configured) is driver
-    assert options is not None
+    options = captured["options"]
+    assert isinstance(options, FakeOptions)
     assert "--user-agent=TestBrowser/1.0" in options.arguments
-    assert driver_options["options"] is options
-    assert service_options == {}
+    assert captured["driver_kwargs"]["options"] is options  # type: ignore[index]
+    assert captured["service_kwargs"] == {}
     assert driver.timeout == configured.scraper_page_load_timeout_sec
     assert driver.commands == [
+        ("Page.addScriptToEvaluateOnNewDocument", {"source": HIDE_WEBDRIVER_JS}),
         ("Network.enable", {}),
         ("Network.setExtraHTTPHeaders", {"headers": {"X-Client": "realstar-test"}}),
     ]
+
+
+def test_default_driver_factory_removes_automation_markers(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = FakeDriver()
+    captured = patch_selenium(monkeypatch, driver)
+
+    default_driver_factory(settings)
+    options = captured["options"]
+    assert isinstance(options, FakeOptions)
+    assert options.experimental["excludeSwitches"] == ["enable-automation"]
+    assert options.experimental["useAutomationExtension"] is False
+    assert "--disable-blink-features=AutomationControlled" in options.arguments
+    assert not any(a.startswith("--headless") for a in options.arguments)  # 기본은 화면 표시
+    assert not any(a.startswith("--user-data-dir") for a in options.arguments)
+    assert not any(a.startswith("--user-agent") for a in options.arguments)  # 실제 Chrome UA 사용
+    assert "webdriver" in HIDE_WEBDRIVER_JS
+    assert all(c != "Network.setUserAgentOverride" for c, _ in driver.commands)
+    # 기본 Accept-Language는 CDP 추가 헤더가 아니라 Chrome 언어 설정으로 들어간다
+    assert options.experimental["prefs"] == {"intl.accept_languages": "ko-KR,ko"}
+    assert driver.commands == [("Page.addScriptToEvaluateOnNewDocument", {"source": HIDE_WEBDRIVER_JS})]
+
+
+def test_accept_language_goes_to_chrome_prefs_and_other_headers_to_cdp(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    driver = FakeDriver()
+    captured = patch_selenium(monkeypatch, driver)
+    configured = settings.model_copy(update={
+        "scraper_custom_headers": {"accept-language": "en-US,en;q=0.8", "X-Client": "realstar-test"},
+    })
+
+    default_driver_factory(configured)
+    options = captured["options"]
+    assert isinstance(options, FakeOptions)
+    assert options.experimental["prefs"] == {"intl.accept_languages": "en-US,en"}
+    assert driver.commands[-1] == ("Network.setExtraHTTPHeaders", {"headers": {"X-Client": "realstar-test"}})
+
+
+def test_headless_mode_strips_headless_marker_from_user_agent(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    driver = FakeDriver(user_agent="Mozilla/5.0 HeadlessChrome/131.0.0.0 Safari/537.36")
+    captured = patch_selenium(monkeypatch, driver)
+    configured = settings.model_copy(update={"scraper_headless": True, "scraper_user_data_dir": tmp_path / "profile"})
+
+    default_driver_factory(configured)
+    options = captured["options"]
+    assert isinstance(options, FakeOptions)
+    assert "--headless=new" in options.arguments
+    assert f"--user-data-dir={tmp_path / 'profile'}" in options.arguments
+    overrides = [p for c, p in driver.commands if c == "Network.setUserAgentOverride"]
+    assert overrides == [{
+        "userAgent": "Mozilla/5.0 Chrome/131.0.0.0 Safari/537.36",
+        "acceptLanguage": "ko-KR,ko;q=0.9",
+    }]
+
+
+def test_headless_mode_keeps_configured_user_agent(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = FakeDriver(user_agent="Mozilla/5.0 HeadlessChrome/131.0.0.0 Safari/537.36")
+    patch_selenium(monkeypatch, driver)
+    configured = settings.model_copy(update={"scraper_headless": True, "scraper_user_agent": "TestBrowser/1.0"})
+
+    default_driver_factory(configured)
+    names = [c for c, _ in driver.commands]
+    assert "Browser.getVersion" not in names and "Network.setUserAgentOverride" not in names
+
+
+def test_user_data_dir_loads_from_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SCRAPER_USER_DATA_DIR", str(tmp_path / "profile"))
+
+    assert Settings(_env_file=None).scraper_user_data_dir == tmp_path / "profile"
+
+    monkeypatch.setenv("SCRAPER_USER_DATA_DIR", "")
+    assert Settings(_env_file=None).scraper_user_data_dir is None
 
 
 def test_scraper_headers_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,6 +181,7 @@ def test_scraper_headers_have_browser_safe_defaults() -> None:
     settings = Settings(_env_file=None)
 
     assert settings.scraper_user_agent is None
+    assert settings.scraper_user_data_dir is None
     assert settings.scraper_custom_headers == {"Accept-Language": "ko-KR,ko;q=0.9"}
 
 

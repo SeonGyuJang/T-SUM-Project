@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     scraper_chrome_binary: str | None = None  # 비워 두면 Selenium Manager가 찾는다
     scraper_chromedriver_path: str | None = None
     scraper_user_agent: str | None = None
+    # 수집 전용 Chrome 프로필 폴더. 비우면 매번 새 임시 프로필(쿠키 없음)로 시작한다.
+    scraper_user_data_dir: Path | None = None
     scraper_custom_headers: dict[str, str] = Field(
         default_factory=lambda: {"Accept-Language": "ko-KR,ko;q=0.9"}
     )
@@ -102,6 +104,12 @@ class Settings(BaseSettings):
             if v.startswith(prefix):
                 return "postgresql+psycopg://" + v[len(prefix):]
         return v
+
+    @field_validator("scraper_user_data_dir", mode="before")
+    @classmethod
+    def _empty_user_data_dir_is_none(cls, v: object) -> object:
+        """SCRAPER_USER_DATA_DIR= 처럼 비워 두면 Path('.')가 아니라 '사용 안 함'으로 본다."""
+        return None if isinstance(v, str) and not v.strip() else v
 
     @field_validator("scraper_custom_headers")
     @classmethod

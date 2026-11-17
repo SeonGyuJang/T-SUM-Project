@@ -1,0 +1,25 @@
+{
+  "started_at": "2026-11-17T04:22:56.376169+00:00",
+  "products": [
+    {
+      "url": "https://www.coupang.com/vp/products/9751850127?itemId=29200410159&vendorItemId=96120828949",
+      "product_id": "9751850127",
+      "outcome": "blocked",
+      "failed_step": "상품 페이지",
+      "detail": "title matched 'Access Denied': Access Denied",
+      "blocked_at_page": 1,
+      "elapsed_sec": 43.4,
+      "pages_loaded_total": 1
+    }
+  ],
+  "settings": {
+    "delay": [
+      3.0,
+      7.0
+    ],
+    "per_star": 10,
+    "headless": false
+  },
+  "finished_at": "2026-11-17T04:23:39.977899+00:00",
+  "selectors_version": "2026-11-13-draft"
+}

@@ -1,0 +1,2 @@
+https://www.coupang.com/vp/products/7600861637?itemId=20106136390&vendorItemId=94473434459&sourceType=CAMPAIGN&campaignId=6585&categoryId=0&traceId=mwk8v4o5	상품 페이지 HTTP 403 (차단되었을 수 있음)
+https://www.coupang.com/vp/products/9200522420?itemId=27164691858&vendorItemId=94447628279&sourceType=CAMPAIGN&campaignId=6585&categoryId=0&traceId=mwk8vfzl	상품 페이지 HTTP 403 (차단되었을 수 있음)

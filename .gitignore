@@ -31,3 +31,5 @@ next-env.d.ts
 
 # Redis 로컬 덤프
 dump.rdb
+
+.browser_profile/

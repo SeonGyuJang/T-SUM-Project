@@ -23,6 +23,7 @@
 
 결과
   output/products/<상품ID>.json   상품별 결과 (이미 있으면 다음 실행 때 건너뜀)
+                                  {"상품정보": {전체/별점별 리뷰 개수 ...}, "리뷰": [ {...}, ... ]}
   output/all_products.json        전체 상품 결과를 하나로 합친 파일
   output/failed.txt               실패한 URL과 이유
 """
@@ -47,7 +48,9 @@ API_BASE = "https://www.coupang.com/next-api/review"
 PAGE_SIZE = 10                 # 쿠팡 페이지가 쓰는 값 그대로
 SORT_BY = "ORDER_SCORE_ASC"    # discover에서 확인된 기본 정렬값
 PER_RATING_TARGET = 100        # 별점당 최대 수집 개수
-MAX_PAGES_PER_RATING = 30      # 안전장치: 별점당 최대 페이지 수
+EXTRA_PAGES = 5                # 목표 페이지 수 외에 더 넘겨 볼 여유 페이지
+PAGE_RETRIES = 4               # 한 페이지가 빈 응답/오류일 때 시도 횟수
+RETRY_BACKOFF = (5, 15, 30, 60)  # 재시도 전 대기(초): 점점 길게
 
 API_DELAY_RANGE = (1.5, 3.5)   # API 호출 사이 대기(초)
 PRODUCT_DELAY_RANGE = (5.0, 10.0)  # 상품 사이 대기(초)
@@ -70,6 +73,14 @@ ID_KEYS = ("reviewId", "id")
 TOTAL_KEYS = ("totalCount", "totalReviewCount", "reviewCount", "ratingCount", "totalElements", "total")
 AVERAGE_KEYS = ("ratingAverage", "averageRating", "avgRating", "ratingAvg", "averageScore", "average")
 COUNT_KEYS = ("count", "ratingCount", "reviewCount", "totalCount", "cnt")
+WRITER_KEYS = ("displayName", "displayWriter", "name", "nickname", "memberName")
+PHOTO_LIST_KEYS = ("attachments", "imageAttachments", "photos", "images")
+PHOTO_URL_KEYS = ("imgSrcThumbnail", "thumbnailPath", "thumbnail", "thumbnailUrl",
+                  "imgSrcOrigin", "imagePath", "imageUrl", "imgSrc", "url", "path")
+PHOTO_URL_PREFIX = "https://thumbnail.coupangcdn.com/thumbnails/local/320/"  # 상대 경로일 때 붙임
+
+# 리뷰 작성자 이름을 가릴지 여부 (True: 한송희 → 한*희)
+MASK_CUSTOMER_NAME = True
 
 # 페이지 안에서 실행할 fetch (브라우저의 쿠키/헤더를 그대로 사용)
 FETCH_JS = """async (url) => {
@@ -124,8 +135,8 @@ def to_float(v):
         return None
 
 
-def normalize_date(v):
-    """epoch(ms/s) 숫자나 문자열을 'YYYY-MM-DD HH:MM' 형태로."""
+def normalize_date(v, fmt="%Y년%m월%d일"):
+    """epoch(ms/s) 숫자나 날짜 문자열을 '2026년09월09일' 형태로."""
     if v is None:
         return ""
     n = to_int(v) if not isinstance(v, str) or v.isdigit() else None
@@ -133,8 +144,62 @@ def normalize_date(v):
         if n > 1e11:
             n /= 1000
         if n > 1e9:
-            return datetime.fromtimestamp(n, KST).strftime("%Y-%m-%d %H:%M")
-    return str(v).strip()
+            return datetime.fromtimestamp(n, KST).strftime(fmt)
+    s = str(v).strip()
+    m = re.match(r"(\d{4})[-./](\d{1,2})[-./](\d{1,2})", s)
+    if m:
+        return datetime(int(m[1]), int(m[2]), int(m[3])).strftime(fmt)
+    return s
+
+
+def mask_name(name: str) -> str:
+    name = (name or "").strip()
+    if not MASK_CUSTOMER_NAME or len(name) < 2 or "*" in name:
+        return name
+    if len(name) == 2:
+        return name[0] + "*"
+    return name[0] + "*" * (len(name) - 2) + name[-1]
+
+
+def writer_name(item) -> str:
+    v = get_field(item, WRITER_KEYS, depth=0)
+    if v is None and isinstance(item.get("member"), dict):
+        v = get_field(item["member"], WRITER_KEYS, depth=1)
+    return mask_name(v if isinstance(v, str) else "")
+
+
+def photo_urls(item) -> list:
+    """리뷰 첨부 이미지 URL 목록."""
+    atts = get_field(item, PHOTO_LIST_KEYS, depth=0) or []
+    if isinstance(atts, dict):
+        atts = [atts]
+    urls = []
+    for a in atts if isinstance(atts, list) else []:
+        cand = None
+        if isinstance(a, str):
+            cand = a
+        elif isinstance(a, dict):
+            cand = get_field(a, PHOTO_URL_KEYS, depth=1)
+            if not isinstance(cand, str):  # 키 이름을 모를 때: 이미지처럼 생긴 문자열 아무거나
+                cand = next((v for v in a.values() if isinstance(v, str)
+                             and re.search(r"\.(jpe?g|png|webp|gif)(\?|$)", v, re.I)), None)
+        if not isinstance(cand, str) or not cand.strip():
+            continue
+        cand = cand.strip()
+        if cand.startswith("//"):
+            cand = "https:" + cand
+        elif not cand.startswith("http"):
+            cand = PHOTO_URL_PREFIX + cand.lstrip("/")
+        if cand not in urls:
+            urls.append(cand)
+    return urls
+
+
+def format_rating(v) -> str:
+    if v is None:
+        return ""
+    f = round(float(v), 1)
+    return str(int(f)) if f == int(f) else str(f)
 
 
 def option_text(v):
@@ -154,8 +219,11 @@ def find_review_list(data):
         dicts = [x for x in node if isinstance(x, dict)]
         if len(dicts) < len(node) * 0.8:
             continue
+        # 별점 + (리뷰 ID 또는 본문)이 있으면 리뷰로 인정. 본문 없이 별점만 남긴 리뷰도 포함.
         hits = sum(1 for x in dicts
-                   if get_field(x, RATING_KEYS) is not None and get_field(x, CONTENT_KEYS) is not None)
+                   if get_field(x, RATING_KEYS, depth=1) is not None
+                   and (get_field(x, ID_KEYS, depth=0) is not None
+                        or get_field(x, CONTENT_KEYS) is not None))
         if hits >= max(1, len(dicts) * 0.5) and len(dicts) > len(best):
             best = dicts
     return best
@@ -172,6 +240,29 @@ def parse_review(item):
         "title": str(title).strip() if isinstance(title, str) else "",
         "content": str(content).strip() if content is not None else "",
         "date": normalize_date(get_field(item, DATE_KEYS)),
+        "writer": writer_name(item),
+        "photos": photo_urls(item),
+    }
+
+
+def to_output_review(r, product_name, url, total, avg):
+    """첨부해 주신 JSON 형식으로 변환 (모든 값은 문자열)."""
+    return {
+        "고객_아이디": r["writer"],
+        "고객_평점": str(r["rating"]) if r["rating"] is not None else "",
+        "구매상품": r["purchased_item"],
+        "단가_와우": "",
+        "단가_쿠팡": "",
+        "리뷰_작성_시간": r["date"],
+        "리뷰_제목": r["title"],
+        "상세리뷰": r["content"],
+        "상품": product_name,
+        "상품_URL": url,
+        "상품평_개수": str(total) if total is not None else "",
+        "와우할인가": "",
+        "전체_평점": format_rating(avg),
+        "쿠팡판매가": "",
+        "포토리뷰": json.dumps(r["photos"], ensure_ascii=False),
     }
 
 
@@ -256,50 +347,130 @@ def warm_up(page):
         page.wait_for_timeout(random.randint(400, 900))
 
 
-def collect_summary(page, pid):
-    data = api_get(page, review_api_url(pid, 1))
-    reviews = find_review_list(data)
-    counts = find_rating_counts(data)
-    total = find_number(data, TOTAL_KEYS, skip_lists=reviews)
-    avg = find_number(data, AVERAGE_KEYS, skip_lists=reviews)
-    return data, {
-        "total_reviews": int(total) if total is not None else None,
-        "average_rating": avg,
-        "rating_counts": counts,
-    }
+def collect_summary(page, pid, log=print):
+    """전체 리뷰 수 / 별점별 개수 / 평균 별점. 빈 응답이면 재시도."""
+    data, info = None, None
+    for attempt in range(1, PAGE_RETRIES + 1):
+        try:
+            data = api_get(page, review_api_url(pid, 1))
+            reviews = find_review_list(data)
+            counts = find_rating_counts(data)
+            total = find_number(data, TOTAL_KEYS, skip_lists=reviews)
+            avg = find_number(data, AVERAGE_KEYS, skip_lists=reviews)
+            info = {"total_reviews": int(total) if total is not None else None,
+                    "average_rating": avg, "rating_counts": counts}
+            if counts and sum(counts.values()) > 0:
+                return data, info
+            reason = "별점별 개수 없음"
+        except Exception as e:
+            reason = str(e)[:80]
+        save_debug(pid, "summary", 1, attempt, data if data is not None else reason)
+        wait = RETRY_BACKOFF[min(attempt - 1, len(RETRY_BACKOFF) - 1)]
+        log(f"      ↻ 요약 정보 {reason} → {wait}초 후 재시도 ({attempt}/{PAGE_RETRIES})")
+        page.wait_for_timeout(wait * 1000)
+    if info is None:
+        raise RuntimeError("요약 정보를 가져오지 못함 (output/raw/debug/ 확인)")
+    return data, info  # 별점별 개수는 못 찾았지만 나머지로 진행 (필터 응답 개수로 보완)
+
+
+def save_debug(pid, rating, page_no, attempt, data):
+    """이상한 응답을 output/raw/debug/ 에 저장 (원인 확인용)."""
+    d = RAW_DIR / "debug"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{pid}_r{rating}_p{page_no}_try{attempt}.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) if not isinstance(data, str) else data,
+        encoding="utf-8")
+
+
+def fetch_review_page(page, pid, rating, page_no, log=print):
+    """리뷰 한 페이지를 가져온다. 빈 응답·오류면 대기 시간을 늘려 가며 재시도.
+    끝까지 실패하면 (None, None) 반환."""
+    for attempt in range(1, PAGE_RETRIES + 1):
+        try:
+            data = api_get(page, review_api_url(pid, page_no, rating=str(rating)))
+            items = find_review_list(data)
+            if items:
+                return data, items
+            save_debug(pid, rating, page_no, attempt, data)
+            reason = "빈 목록"
+        except Exception as e:
+            save_debug(pid, rating, page_no, attempt, str(e))
+            reason = str(e)[:80]
+        wait = RETRY_BACKOFF[min(attempt - 1, len(RETRY_BACKOFF) - 1)]
+        log(f"      ↻ {rating}점 {page_no}페이지 {reason} → {wait}초 후 재시도 ({attempt}/{PAGE_RETRIES})")
+        page.wait_for_timeout(wait * 1000)
+        if attempt == PAGE_RETRIES - 1:  # 마지막 시도 전에는 페이지를 새로 고쳐 쿠키 갱신
+            try:
+                page.reload(wait_until="domcontentloaded")
+                warm_up(page)
+            except Exception:
+                pass
+    return None, None
 
 
 def collect_rating(page, pid, rating, target, log=print):
-    """특정 별점의 리뷰를 target 개까지 수집. (첫 페이지 응답의 전체 개수도 함께 반환)"""
+    """특정 별점의 리뷰를 target 개까지 수집. (첫 페이지 응답의 전체 개수도 함께 반환)
+
+    target 개를 채우거나, 쿠팡이 실제로 더 줄 리뷰가 없을 때만 멈춘다.
+    """
     got, seen, filtered_total, mismatched = [], set(), None, 0
-    for page_no in range(1, MAX_PAGES_PER_RATING + 1):
-        data = api_get(page, review_api_url(pid, page_no, rating=str(rating)))
-        items = find_review_list(data)
-        if page_no == 1:
+    no_new_streak = failed_pages = 0
+    max_pages = -(-target // PAGE_SIZE) + EXTRA_PAGES  # 올림 + 여유
+    page_no = 0
+    while len(got) < target and page_no < max_pages:
+        page_no += 1
+        data, items = fetch_review_page(page, pid, rating, page_no, log)
+        if items is None:
+            failed_pages += 1
+            log(f"      ✗ {rating}점 {page_no}페이지를 끝내 못 가져옴 (output/raw/debug/ 확인)")
+            if failed_pages >= 2:  # 두 페이지째 실패면 차단된 것으로 보고 중단
+                break
+            continue  # 한 페이지는 건너뛰고 다음 페이지에서 채워 봄
+        if filtered_total is None:
             t = find_number(data, TOTAL_KEYS, skip_lists=items)
             filtered_total = int(t) if t is not None else None
-        if not items:
-            break
-        new = 0
-        for raw in items:
-            r = parse_review(raw)
-            key = r["review_id"] or (r["date"], r["content"][:80])
-            if key in seen:
-                continue
-            seen.add(key)
-            if r["rating"] is not None and r["rating"] != rating:
-                mismatched += 1
-            got.append(r)
-            new += 1
-            if len(got) >= target:
+            if filtered_total is not None:  # 필터 응답이 알려 준 실제 개수로 목표 보정
+                target = min(target, filtered_total)
+                max_pages = -(-target // PAGE_SIZE) + EXTRA_PAGES
+        def absorb(batch):
+            nonlocal mismatched
+            added = 0
+            for raw in batch:
+                if len(got) >= target:
+                    break
+                r = parse_review(raw)
+                key = r["review_id"] or (r["date"], r["content"][:80])
+                if key in seen:
+                    continue
+                seen.add(key)
+                if r["rating"] is not None and r["rating"] != rating:
+                    mismatched += 1
+                got.append(r)
+                added += 1
+            return added
+
+        new = absorb(items)
+        # 10개보다 적게 왔는데 아직 목표에 못 미치면, 같은 페이지를 다시 요청해 빠진 리뷰 보충
+        refill = 0
+        while len(items) < PAGE_SIZE and len(got) < target and refill < 2:
+            refill += 1
+            pause(page, API_DELAY_RANGE)
+            _, again = fetch_review_page(page, pid, rating, page_no, log)
+            if not again:
                 break
-        if len(got) >= target or new == 0 or len(items) < PAGE_SIZE:
+            new += absorb(again)
+            items = again if len(again) > len(items) else items
+        # 같은 리뷰만 계속 오면(마지막 페이지를 넘김) 3번 연속일 때 멈춤
+        no_new_streak = 0 if new else no_new_streak + 1
+        if no_new_streak >= 3:
             break
-        pause(page, API_DELAY_RANGE)
+        if len(got) < target:
+            pause(page, API_DELAY_RANGE)
+
     if mismatched > len(got) * 0.5:
         log(f"    ⚠ {rating}점 필터가 적용되지 않은 것 같습니다 "
             f"({len(got)}개 중 {mismatched}개가 다른 별점). 'ratings' 파라미터 형식을 확인하세요.")
-    return got, filtered_total
+    return got, filtered_total, target
 
 
 def collect_product(session, url, per_rating, log=print):
@@ -310,7 +481,7 @@ def collect_product(session, url, per_rating, log=print):
         # page_action 안의 예외는 Scrapling이 로그만 남기고 삼키므로 직접 보관
         try:
             warm_up(page)
-            _, summary = collect_summary(page, pid)
+            _, summary = collect_summary(page, pid, log)
             state["summary"] = summary
             counts = summary["rating_counts"] or {}
             state["reviews"], state["filtered_totals"] = {}, {}
@@ -321,12 +492,15 @@ def collect_product(session, url, per_rating, log=print):
                     state["reviews"][rating], state["filtered_totals"][rating] = [], 0
                     continue
                 target = min(per_rating, known) if known is not None else per_rating
-                reviews, ftotal = collect_rating(page, pid, rating, target, log)
+                reviews, ftotal, final_target = collect_rating(page, pid, rating, target, log)
                 state["reviews"][rating] = reviews
                 state["filtered_totals"][rating] = ftotal
-                log(f"    {rating}점: {len(reviews)}개 수집"
-                    + (f" (전체 {known if known is not None else ftotal}개)"
-                       if (known is not None or ftotal is not None) else ""))
+                total_txt = known if known is not None else ftotal
+                mark = "✓" if len(reviews) >= final_target else "⚠ 목표 미달"
+                log(f"    {rating}점: {len(reviews)}/{final_target}개 수집 {mark}"
+                    + (f" (전체 {total_txt}개)" if total_txt is not None else ""))
+                if len(reviews) < final_target:
+                    state.setdefault("shortfalls", {})[rating] = (len(reviews), final_target)
         except Exception as e:
             state["error"] = e
         return page
@@ -350,20 +524,25 @@ def collect_product(session, url, per_rating, log=print):
         summary["total_reviews"] = sum(summary["rating_counts"].values())
         summary["total_reviews_source"] = "별점별 개수 합계"
 
-    reviews = [r for rating in (5, 4, 3, 2, 1) for r in state["reviews"].get(rating, [])]
+    name = clean_product_name(og)
+    total, avg = summary["total_reviews"], summary["average_rating"]
+    counts = summary["rating_counts"] or {}
+    reviews = [to_output_review(r, name, url, total, avg)
+               for rating in (5, 4, 3, 2, 1) for r in state["reviews"].get(rating, [])]
     return {
-        "product_id": pid,
-        "product_name": clean_product_name(og),
-        "url": url,
-        "collected_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
-        "summary": {
-            "total_reviews": summary["total_reviews"],
-            "average_rating": summary["average_rating"],
-            "rating_counts": {str(k): v for k, v in (summary["rating_counts"] or {}).items()} or None,
-            **{k: v for k, v in summary.items() if k.endswith("_source")},
+        "상품정보": {
+            "상품ID": pid,
+            "상품명": name,
+            "상품_URL": url,
+            "전체_평점": format_rating(avg),
+            "전체_리뷰_개수": total,
+            "별점별_리뷰_개수": {f"{r}점": counts.get(r) for r in (5, 4, 3, 2, 1)},
+            "수집된_리뷰_개수": {f"{r}점": len(state["reviews"].get(r, [])) for r in (5, 4, 3, 2, 1)},
+            "수집_완료": not state.get("shortfalls"),
+            "목표_미달": {f"{r}점": f"{got}/{tgt}" for r, (got, tgt) in state.get("shortfalls", {}).items()},
+            "수집_시각": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
         },
-        "collected_counts": {str(r): len(state["reviews"].get(r, [])) for r in (5, 4, 3, 2, 1)},
-        "reviews": reviews,
+        "리뷰": reviews,
     }
 
 
@@ -427,8 +606,22 @@ def inspect(url):
     print(f"[요약 인식] {json.dumps(out['summary'], ensure_ascii=False)}")
     print(f"[리뷰 목록] {len(reviews)}개 인식")
     if reviews:
-        print(f"[원본 리뷰 키] {list(reviews[0].keys())}")
-        print(f"[파싱 예시] {json.dumps(parse_review(reviews[0]), ensure_ascii=False)}")
+        s = out["summary"]
+        sample_out = to_output_review(parse_review(reviews[0]), "(상품명)", url,
+                                      s["total_reviews"], s["average_rating"])
+        sample_out["상세리뷰"] = sample_out["상세리뷰"][:60] + "…"
+        print(f"[출력 형식 예시] {json.dumps(sample_out, ensure_ascii=False, indent=2)}")
+        # 작성자 / 사진 필드 확인용 원본 일부
+        r0 = reviews[0]
+        print(f"[원본 작성자 필드] displayName={r0.get('displayName')!r}, "
+              f"displayWriter={str(r0.get('displayWriter'))[:80]!r}, member={str(r0.get('member'))[:80]!r}")
+        with_photo = next((x for x in reviews if get_field(x, PHOTO_LIST_KEYS, depth=0)), None)
+        if with_photo:
+            att = get_field(with_photo, PHOTO_LIST_KEYS, depth=0)
+            print(f"[원본 사진 첨부 예시] {json.dumps(att[:1] if isinstance(att, list) else att, ensure_ascii=False)[:400]}")
+            print(f"[사진 URL 인식] {photo_urls(with_photo)[:3]}")
+        else:
+            print("[사진 첨부] 이 페이지의 리뷰 10개에는 사진이 없습니다.")
     r1 = [parse_review(x)["rating"] for x in find_review_list(out["r1_raw"])]
     print(f"[ratings=1 필터 결과 별점] {r1}  ← 전부 1이면 필터 정상")
 
@@ -460,7 +653,16 @@ def collect(url_file, per_rating, headless):
             continue  # 같은 상품의 다른 옵션 링크는 한 번만
         seen_ids.add(m.group(1))
         urls.append(u)
-    todo = [u for u in urls if not (PRODUCT_DIR / f"{product_id_from_url(u)}.json").exists()]
+    def is_done(u):
+        path = PRODUCT_DIR / f"{product_id_from_url(u)}.json"
+        if not path.exists():
+            return False
+        try:  # 목표에 못 미친 상품은 다시 수집
+            return json.loads(path.read_text(encoding="utf-8"))["상품정보"].get("수집_완료", True)
+        except Exception:
+            return False
+
+    todo = [u for u in urls if not is_done(u)]
     print(f"전체 {len(urls)}개 / 완료 {len(urls) - len(todo)}개 / 남은 {len(todo)}개")
 
     with open_session(headless=headless) as session:
@@ -468,11 +670,12 @@ def collect(url_file, per_rating, headless):
             print(f"[{n}/{len(todo)}] {url}")
             try:
                 result = collect_product(session, url, per_rating)
-                path = PRODUCT_DIR / f"{result['product_id']}.json"
+                info = result["상품정보"]
+                path = PRODUCT_DIR / f"{info['상품ID']}.json"
                 path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-                s = result["summary"]
-                print(f"  ✓ {result['product_name'][:40]} | 전체 {s['total_reviews']}개 "
-                      f"| 별점별 {s['rating_counts']} | 수집 {len(result['reviews'])}개")
+                status = "✓" if info["수집_완료"] else f"⚠ 일부 미달 {info['목표_미달']} (다음 실행 때 다시 수집)"
+                print(f"  {status} {info['상품명'][:40]} | 전체 {info['전체_리뷰_개수']}개 "
+                      f"| 별점별 {info['별점별_리뷰_개수']} | 수집 {len(result['리뷰'])}개")
             except Exception as e:
                 print(f"  ✗ 실패: {e}")
                 with (OUTPUT_DIR / "failed.txt").open("a", encoding="utf-8") as f:

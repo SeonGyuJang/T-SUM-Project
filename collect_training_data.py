@@ -870,10 +870,18 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("stats", help="모인 데이터 양 보기")
     for p in (c, g, n, sub.choices["stats"]):
         p.add_argument("--out", default="", help="결과 폴더 (기본 model/data/raw/…)")
+    for p in sub.choices.values():  # --cutoff는 명령 앞·뒤 어디에 써도 된다
+        p.add_argument("--cutoff", dest="cutoff_sub", default=None, help="사람 리뷰 기준일 (기본 2022-11-30)")
     ap.add_argument("--cutoff", default=CUTOFF.isoformat(), help="사람 리뷰 기준일 (기본 2022-11-30)")
-    args = ap.parse_args(argv)
-    CUTOFF = date.fromisoformat(args.cutoff)
     cmds = {"collect": cmd_collect, "category": cmd_category, "inspect": cmd_inspect, "naver": cmd_naver, "stats": cmd_stats}
+    # 명령 앞에 --를 붙여 쓴 경우(--category)도 받아 준다
+    raw = list(sys.argv[1:] if argv is None else argv)
+    raw = [a[2:] if a.startswith("--") and a[2:] in cmds and a[2:] not in raw else a for a in raw]
+    args = ap.parse_args(raw)
+    try:
+        CUTOFF = date.fromisoformat(args.cutoff_sub or args.cutoff)
+    except ValueError:
+        ap.error(f"--cutoff 날짜 형식이 올바르지 않아요(예: 2022-11-30): {args.cutoff_sub or args.cutoff}")
     return cmds[args.cmd](args)
 
 

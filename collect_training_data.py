@@ -19,15 +19,27 @@ model/MODEL_DEV.md 4.2(데이터 설계)의 원천 데이터를 모은다.
   python collect_training_data.py naver                              # 네이버 쇼핑 데이터 받기·변환
   python collect_training_data.py inspect "<쿠팡 상품 URL>"          # 날짜순 정렬·페이지 이동 점검 (먼저 한 번)
   python collect_training_data.py category training_categories.txt   # 카테고리 안 상품을 전부 돌며 과거 리뷰가 있으면 수집
+  python collect_training_data.py category training_categories.txt --workers 3   # 브라우저 3개로 나눠서
   python collect_training_data.py category "https://www.coupang.com/np/categories/194276" --name 식품
   python collect_training_data.py collect training_products.txt      # 상품 목록 수집 (중단 후 다시 실행하면 이어서)
   python collect_training_data.py collect training_products.txt --per-star 30 --post-per-star 10
   python collect_training_data.py stats                              # 모인 양 보기
 
+병렬 수집
+  --workers N : 브라우저 N개를 띄워 상품을 나눠 맡는다(같은 PC·같은 IP). 브라우저마다 Chrome 프로필을 따로 쓴다
+                (.browser_profile, .browser_profile_w1, …; 처음 한 번 원본 프로필을 복사해 쿠키를 이어받음).
+                전체 요청 간격은 --min-interval 초 이상으로 묶는다. 하나라도 차단되면 모두 멈춘다.
+                같은 IP에서 동시에 요청하므로 N을 늘릴수록 차단 위험이 커진다(권장 2~3).
+
 결과 (git에 올라가지 않는 model/data/ 아래)
-  model/data/raw/coupang/<날짜>_<시각>.jsonl   리뷰 1건 = 1줄 (MODEL_DEV.md 4.12.1 형식 + period 필드)
-  model/data/raw/coupang/_state.json           상품별 완료 기록 (이어서 수집용)
-  model/data/raw/naver/naver_shopping.jsonl    네이버 쇼핑 변환 결과
+  model/data/raw/coupang/coupang_training.json   수집한 모든 쿠팡 데이터 (JSON 파일 하나)
+      {"meta": {...}, "summary": {...},
+       "categories": {"<카테고리 URL>": {"name", "listed_at", "products": [{product_id, url, name}, ...]}},
+       "products": {"<상품ID>": {"name", "url", "category", "status": "collected"|"no_old", "checked_at",
+                                 "check": {...}, "counts": {...}, "reviews": [리뷰, ...]}}}
+      리뷰 = MODEL_DEV.md 4.12.1 형식 + period(pre_chatgpt/post_chatgpt) · length_bucket
+      상품 하나가 끝날 때마다 바로 저장한다(임시 파일에 쓴 뒤 바꿔치기 → 중간에 끊겨도 파일이 깨지지 않음).
+  model/data/raw/naver/naver_shopping.jsonl      네이버 쇼핑 변환 결과 (별도 파일)
 
 쿠팡이 차단(403·접근 거부)하면 그 자리에서 멈춘다. 우회하지 않는다. 시간이 지난 뒤 같은 명령을 다시 실행하면
 끝난 상품은 건너뛰고 이어서 모은다.
@@ -40,8 +52,10 @@ import contextlib
 import hashlib
 import json
 import math
+import os
 import random
 import re
+import shutil
 import sys
 import time
 import urllib.request
@@ -61,13 +75,23 @@ PER_STAR = 30                     # 상품·별점당 2022-11-30 이전 리뷰 �
 POST_PER_STAR = 10                # 상품·별점당 2023년 이후 리뷰 최대 개수 (0이면 수집 안 함)
 FALLBACK_PAGES = 8                # 날짜순이 안 될 때 기본 정렬로 훑어볼 최대 페이지
 PAGE_ATTEMPTS = 3
-PAGE_BACKOFF = (5, 20)            # 재시도 전 대기(초)
+PAGE_BACKOFF = (5.0, 20.0)        # 재시도 전 대기(초)
 PRODUCT_DELAY = (8.0, 15.0)       # 상품 사이 대기(초) — 서비스 수집보다 느리게
 SKIP_DELAY = (3.0, 6.0)           # 과거 리뷰가 없어 건너뛴 상품 뒤 대기(초)
 PER_PRODUCT = 40                  # 카테고리 모드: 상품당 최대 리뷰 수 (한 상품 과대표집·과적합 방지)
 LIST_PAGES = 10                   # 카테고리 모드: 상품 목록을 넘겨 볼 최대 페이지 수
 LIST_SIZE = 60                    # 카테고리 목록 한 페이지 상품 수 (쿠팡 listSize)
-SCRAPER_VERSION = "collect_training_data/1"
+MAX_WORKERS = 4                   # 같은 IP에서 동시에 띄울 최대 브라우저 수
+MIN_INTERVAL = 1.0                # 모든 작업자를 합친 요청 사이 최소 간격(초)
+SCRAPER_VERSION = "collect_training_data/2"
+
+# 테스트 전용: 대기 시간 배율(예: 0.01). 실제 수집에서는 쓰지 않는다.
+_DELAY_SCALE = float(os.environ.get("COLLECT_DELAY_SCALE") or 1.0)
+if _DELAY_SCALE != 1.0:
+    PRODUCT_DELAY = (PRODUCT_DELAY[0] * _DELAY_SCALE, PRODUCT_DELAY[1] * _DELAY_SCALE)
+    SKIP_DELAY = (SKIP_DELAY[0] * _DELAY_SCALE, SKIP_DELAY[1] * _DELAY_SCALE)
+    PAGE_BACKOFF = (PAGE_BACKOFF[0] * _DELAY_SCALE, PAGE_BACKOFF[1] * _DELAY_SCALE)
+    MIN_INTERVAL = MIN_INTERVAL * _DELAY_SCALE
 
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "model" / "data" / "raw" / "coupang"
@@ -120,6 +144,9 @@ def load_crawler() -> Any:
     except ModuleNotFoundError as e:
         sys.exit(f"수집기 실행에 필요한 패키지가 없습니다: {e.name}\n"
                  f"  pip install \"scrapling[fetchers]\" && scrapling install  (또는 python -m patchright install chromium)")
+    if _DELAY_SCALE != 1.0:
+        lo, hi = cr.API_DELAY_RANGE
+        cr.API_DELAY_RANGE = (lo * _DELAY_SCALE, hi * _DELAY_SCALE)
     return cr
 
 
@@ -152,21 +179,154 @@ def read_products(path: Path) -> list[dict[str, str]]:
     return out
 
 
-def load_state(out_dir: Path) -> dict[str, Any]:
-    p = out_dir / "_state.json"
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
-        except ValueError:
-            pass
-    return {"products": {}}
+STORE_NAME = "coupang_training.json"
+STORE_SCHEMA = "realstar-training/1"
 
 
-def save_state(out_dir: Path, state: dict[str, Any]) -> None:
-    p = out_dir / "_state.json"
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(p)
+class Store:
+    """수집 데이터 JSON 파일 하나. 메인 프로세스만 쓴다(병렬 수집 때도 작업자는 결과만 넘긴다)."""
+
+    def __init__(self, out_dir: Path) -> None:
+        self.dir = out_dir
+        self.path = out_dir / STORE_NAME
+        self.data: dict[str, Any] = self._load()
+
+    def _load(self) -> dict[str, Any]:
+        if self.path.exists():
+            try:
+                d = json.loads(self.path.read_text(encoding="utf-8"))
+                d.setdefault("categories", {})
+                d.setdefault("products", {})
+                return d  # type: ignore[no-any-return]
+            except ValueError as e:
+                bak = self.path.with_suffix(f".broken-{datetime.now(KST):%Y%m%d%H%M%S}.json")
+                self.path.replace(bak)
+                print(f"  ⚠ {self.path.name}을 읽지 못해 {bak.name}(으)로 옮기고 새로 시작해요: {e}")
+        d = {"schema": STORE_SCHEMA, "meta": {"created_at": now_iso()}, "summary": {}, "categories": {}, "products": {}}
+        self._import_legacy(d)
+        return d
+
+    def _import_legacy(self, d: dict[str, Any]) -> None:
+        """이전 형식(*.jsonl + _state.json)으로 모은 데이터가 있으면 한 번만 옮겨 온다."""
+        files = sorted(self.dir.glob("*.jsonl"))
+        state_p = self.dir / "_state.json"
+        if not files and not state_p.exists():
+            return
+        state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
+        for f in files:
+            for line in f.read_text(encoding="utf-8").splitlines():
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                prod = d["products"].setdefault(r["product_id"], {
+                    "product_id": r["product_id"], "name": r.get("product_name"), "url": None,
+                    "category": r.get("category"), "status": "collected", "checked_at": r.get("collected_at"), "reviews": []})
+                if all(x["review_id"] != r["review_id"] for x in prod["reviews"]):
+                    prod["reviews"].append(r)
+        for pid, info in (state.get("products") or {}).items():
+            prod = d["products"].setdefault(pid, {"product_id": pid, "reviews": []})
+            prod.setdefault("name", info.get("name"))
+            prod.setdefault("category", info.get("category"))
+            prod["status"] = info.get("status") or ("collected" if prod["reviews"] else "no_old")
+            prod.setdefault("checked_at", info.get("at"))
+            if info.get("check"):
+                prod["check"] = info["check"]
+        for url, c in (state.get("categories") or {}).items():
+            d["categories"][url] = {"name": c.get("name"), "listed_at": c.get("listed_at"), "products": c.get("products", [])}
+        for prod in d["products"].values():
+            prod["counts"] = review_counts(prod.get("reviews", []))
+        d["meta"]["imported_from"] = [f.name for f in files] + (["_state.json"] if state_p.exists() else [])
+        print(f"  이전 형식 데이터를 {STORE_NAME}로 옮겨 왔어요: 상품 {len(d['products'])}개 (원본 파일은 그대로 둠)")
+
+    # ── 조회 ──
+    def is_done(self, pid: str) -> bool:
+        return self.data["products"].get(pid, {}).get("status") in ("collected", "no_old")
+
+    def listing(self, url: str) -> list[dict[str, str]] | None:
+        c = self.data["categories"].get(url)
+        return c.get("products") if c and c.get("products") else None
+
+    # ── 기록 ──
+    def set_listing(self, url: str, name: str, products: list[dict[str, str]]) -> None:
+        self.data["categories"][url] = {"name": name, "listed_at": now_iso(), "products": products}
+        self.save()
+
+    def put_product(self, item: dict[str, str], result: dict[str, Any]) -> dict[str, Any]:
+        rows = result["rows"]
+        prod = {
+            "product_id": item["product_id"], "name": result.get("name") or item.get("name"), "url": item.get("url"),
+            "category": item.get("category") or None,
+            "status": "collected" if any(r["period"] == "pre_chatgpt" for r in rows) else "no_old",
+            "checked_at": now_iso(), "check": result.get("check") or {}, "worker": result.get("worker"),
+            "counts": review_counts(rows), "reviews": rows,
+        }
+        self.data["products"][item["product_id"]] = prod
+        self.save()
+        return prod
+
+    def save(self) -> None:
+        d = self.data
+        d["schema"] = STORE_SCHEMA
+        d.setdefault("meta", {}).update({"updated_at": now_iso(), "cutoff": CUTOFF.isoformat(),
+                                         "post_from": POST_FROM.isoformat(), "scraper_version": SCRAPER_VERSION})
+        prods = d["products"].values()
+        d["summary"] = {
+            "products_checked": len(d["products"]),
+            "products_collected": sum(1 for p in prods if p.get("status") == "collected"),
+            "products_no_old": sum(1 for p in prods if p.get("status") == "no_old"),
+            "reviews_pre_chatgpt": sum(p.get("counts", {}).get("pre_chatgpt", 0) for p in prods),
+            "reviews_post_chatgpt": sum(p.get("counts", {}).get("post_chatgpt", 0) for p in prods),
+        }
+        self.dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".json.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.path)  # 바꿔치기: 저장 도중 끊겨도 이전 파일이 남는다
+
+    def reviews(self) -> list[dict[str, Any]]:
+        return [r for p in self.data["products"].values() for r in p.get("reviews", [])]
+
+
+def review_counts(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    pre = [r for r in rows if r.get("period") == "pre_chatgpt"]
+    return {
+        "pre_chatgpt": len(pre),
+        "post_chatgpt": sum(1 for r in rows if r.get("period") == "post_chatgpt"),
+        "pre_by_star": {str(s): sum(1 for r in pre if r.get("star") == s) for s in STARS},
+    }
+
+
+# ──────────────────────────────────────────────────────────────
+# 병렬 작업자 공용: 전체 요청 간격 제한, 중단 신호, 로그 머리말
+# ──────────────────────────────────────────────────────────────
+_THROTTLE: Any = None   # (lock, 공유 시각 Value, 최소 간격 초) — 작업자 프로세스에서 설정
+_STOP: Any = None       # multiprocessing.Event — 한 작업자가 차단되면 모두 멈춘다
+_PREFIX = ""
+
+
+class Stopped(Exception):
+    """다른 작업자가 차단돼 이번 상품을 멈췄다(저장하지 않고 다음 실행 때 다시 한다)."""
+
+
+def say(msg: str) -> None:
+    print(f"{_PREFIX}{msg}", flush=True)
+
+
+def throttle_wait() -> None:
+    """모든 작업자를 합쳐 요청 사이 간격을 지킨다."""
+    if _STOP is not None and _STOP.is_set():
+        raise Stopped()
+    if _THROTTLE is None:
+        return
+    lock, last, interval = _THROTTLE
+    with lock:
+        wait = last.value + interval - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        last.value = time.time()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -194,6 +354,7 @@ class ReviewPager:
         last_err = ""
         for attempt in range(1, PAGE_ATTEMPTS + 1):
             self.cr.pause(self.page, self.cr.API_DELAY_RANGE)
+            throttle_wait()
             self.requests += 1
             try:
                 data = self.cr.api_get(self.page, self.url(page_no))
@@ -203,7 +364,7 @@ class ReviewPager:
                     raise Blocked(last_err) from e
                 wait = PAGE_BACKOFF[min(attempt - 1, len(PAGE_BACKOFF) - 1)]
                 self.log(f"      ↻ {self.star or '전체'}{'점' if self.star else ''} {page_no}페이지 {last_err[:60]} → {wait}초 후 재시도")
-                self.page.wait_for_timeout(wait * 1000)
+                self.page.wait_for_timeout(int(wait * 1000))
                 continue
             items = self.cr.find_review_list(data)
             if page_no == 1:
@@ -357,91 +518,6 @@ def to_record(r: dict[str, Any], pid: str, product_name: str, category: str, col
         "source": "coupang_reviews",
         "scraper_version": SCRAPER_VERSION,
     }
-
-
-def collect_one(cr: Any, session: Any, item: dict[str, str], per_star: int, post_per_star: int) -> dict[str, Any]:
-    pid = item["product_id"]
-    box: dict[str, Any] = {"stars": {}, "name": ""}
-
-    def log(msg: str) -> None:
-        print(msg, flush=True)
-
-    def action(page: Any) -> Any:
-        try:
-            try:
-                title = page.evaluate("() => document.querySelector('meta[property=\"og:title\"]')?.content || document.title || ''")
-            except Exception:
-                title = ""
-            if isinstance(title, dict):
-                title = title.get("title") or ""
-            box["name"] = cr.clean_product_name(title if isinstance(title, str) else "")
-            cr.warm_up(page)
-            for star in STARS:
-                res = collect_star(cr, page, pid, star, per_star, post_per_star, log)
-                box["stars"][star] = res
-                log(f"    {star}점: 2022-11-30 이전 {len(res['pre'])}/{per_star}"
-                    + (f" · 2023년 이후 {len(res['post'])}/{post_per_star}" if post_per_star else "")
-                    + f"  (요청 {res['requests']}회, {res['method']})")
-        except Exception as e:  # Scrapling은 page_action 예외를 삼키므로 직접 보관
-            box["error"] = e
-        return page
-
-    resp = session.fetch(item["url"], page_action=action)
-    if getattr(resp, "status", 200) != 200:
-        raise Blocked(f"상품 페이지 HTTP {resp.status}")
-    if "error" in box:
-        raise box["error"]
-    return box
-
-
-def cmd_collect(args: argparse.Namespace) -> int:
-    cr = load_crawler()
-    out_dir = Path(args.out) if args.out else OUT_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-    products = read_products(Path(args.products))
-    state = load_state(out_dir)
-    done = {pid for pid, s in state["products"].items() if s.get("done")}
-    todo = [p for p in products if p["product_id"] not in done]
-    if args.max_products:
-        todo = todo[: args.max_products]
-    print(f"상품 {len(products)}개 / 완료 {len(products) - len([p for p in products if p['product_id'] not in done])}개 / "
-          f"이번에 {len(todo)}개 · 별점당 이전 {args.per_star}개, 이후 {args.post_per_star}개 · 기준일 {CUTOFF}")
-    if not todo:
-        return 0
-    out_file = out_dir / f"{datetime.now(KST):%Y%m%d_%H%M%S}.jsonl"
-    total_pre = total_post = 0
-    try:
-        with cr.open_session(headless=args.headless) as session:
-            for n, item in enumerate(todo, 1):
-                print(f"[{n}/{len(todo)}] {item['product_id']} {item['category'] or ''}", flush=True)
-                box = collect_one(cr, session, item, args.per_star, args.post_per_star)
-                collected_at = now_iso()
-                rows = []
-                for star in STARS:
-                    res = box["stars"].get(star) or {"pre": [], "post": []}
-                    rows += [to_record(r, item["product_id"], box["name"], item["category"], collected_at)
-                             for r in res["pre"] + res["post"]]
-                with out_file.open("a", encoding="utf-8") as f:  # 상품 단위로 한 번에 쓴다(중간 차단 시 반쪽 기록 없음)
-                    for row in rows:
-                        f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                pre = sum(1 for r in rows if r["period"] == "pre_chatgpt")
-                post = sum(1 for r in rows if r["period"] == "post_chatgpt")
-                total_pre, total_post = total_pre + pre, total_post + post
-                state["products"][item["product_id"]] = {
-                    "done": True, "name": box["name"], "category": item["category"], "pre": pre, "post": post,
-                    "per_star": {str(s): len((box["stars"].get(s) or {}).get("pre", [])) for s in STARS},
-                    "file": out_file.name, "at": collected_at,
-                }
-                save_state(out_dir, state)
-                print(f"  ✓ {box['name'][:40]} · 이전 {pre}건 · 이후 {post}건", flush=True)
-                if n < len(todo):
-                    time.sleep(random.uniform(*PRODUCT_DELAY))
-    except Blocked as e:
-        print(f"\n⛔ 쿠팡이 자동 접근을 막았어요: {e}\n   여기서 멈춥니다(우회하지 않음). 시간이 지난 뒤 같은 명령을 다시 실행하면 이어서 모아요.")
-        print(f"   이번 실행: 이전 {total_pre}건, 이후 {total_post}건 → {out_file}")
-        return 2
-    print(f"\n완료: 이전 {total_pre}건, 이후 {total_post}건 → {out_file}")
-    return 0
 
 
 # ──────────────────────────────────────────────────────────────
@@ -599,50 +675,6 @@ def old_review_check(cr: Any, page: Any, pid: str, log: Any) -> dict[str, Any]:
     return {"has_old": False, "reason": f"가장 오래된 리뷰 {oldest}", **info}
 
 
-def check_and_collect(cr: Any, session: Any, item: dict[str, str], per_product: int, post_per_star: int) -> dict[str, Any]:
-    pid = item["product_id"]
-    box: dict[str, Any] = {"stars": {}, "name": item.get("name") or ""}
-
-    def log(msg: str) -> None:
-        print(msg, flush=True)
-
-    def action(page: Any) -> Any:
-        try:
-            try:
-                title = page.evaluate("() => document.querySelector('meta[property=\"og:title\"]')?.content || document.title || ''")
-            except Exception:
-                title = ""
-            if isinstance(title, dict):
-                title = title.get("title") or ""
-            if isinstance(title, str) and title:
-                box["name"] = cr.clean_product_name(title)
-            chk = old_review_check(cr, page, pid, log)
-            box["check"] = chk
-            if not chk["has_old"]:
-                return page
-            cr.warm_up(page)
-            remaining = per_product
-            for idx, star in enumerate((1, 2, 3, 4, 5)):  # 적은 별점부터: 남는 몫을 다음 별점이 가져간다
-                if remaining <= 0:
-                    break
-                quota = math.ceil(remaining / (5 - idx))
-                res = collect_star(cr, page, pid, star, quota, post_per_star, log)
-                box["stars"][star] = res
-                remaining -= len(res["pre"])
-                log(f"    {star}점: 이전 {len(res['pre'])}/{quota}" + (f" · 이후 {len(res['post'])}" if post_per_star else "")
-                    + f"  (요청 {res['requests']}회)")
-        except Exception as e:
-            box["error"] = e
-        return page
-
-    resp = session.fetch(item["url"], page_action=action)
-    if getattr(resp, "status", 200) != 200:
-        raise Blocked(f"상품 페이지 HTTP {resp.status}")
-    if "error" in box:
-        raise box["error"]
-    return box
-
-
 def read_categories(args_targets: list[str], name: str) -> list[dict[str, str]]:
     """인자로 받은 카테고리 URL들, 또는 '## 이름' + URL 형식의 txt 파일."""
     out: list[dict[str, str]] = []
@@ -666,10 +698,220 @@ def read_categories(args_targets: list[str], name: str) -> list[dict[str, str]]:
     return out
 
 
-def cmd_category(args: argparse.Namespace) -> int:
-    cr = load_crawler()
+# ──────────────────────────────────────────────────────────────
+# 상품 하나 처리 (작업자 안에서 실행) → 결과는 피클 가능한 dict
+# ──────────────────────────────────────────────────────────────
+def product_title(cr: Any, page: Any) -> str:
+    try:
+        t = page.evaluate("() => document.querySelector('meta[property=\"og:title\"]')?.content || document.title || ''")
+    except Exception:
+        return ""
+    if isinstance(t, dict):
+        t = t.get("title") or ""
+    return cr.clean_product_name(t) if isinstance(t, str) and t else ""
+
+
+def process_item(cr: Any, session: Any, item: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
+    """상품 페이지를 열고 수집한다.
+    mode=category: 과거 리뷰 유무 확인 → 있으면 상품당 최대 per_product개(1점부터 남은 몫 배분)
+    mode=list:     별점마다 per_star개(+ 이후 리뷰 post_per_star개)"""
+    pid = item["product_id"]
+    box: dict[str, Any] = {"stars": {}, "check": {}}
+
+    def action(page: Any) -> Any:
+        try:
+            box["name"] = product_title(cr, page) or item.get("name") or ""
+            if cfg["mode"] == "category":
+                chk = old_review_check(cr, page, pid, say)
+                box["check"] = chk
+                if not chk["has_old"]:
+                    return page
+                cr.warm_up(page)
+                remaining = cfg["per_product"]
+                for idx, star in enumerate((1, 2, 3, 4, 5)):  # 적은 별점부터: 남는 몫을 다음 별점이 가져간다
+                    if remaining <= 0:
+                        break
+                    quota = math.ceil(remaining / (5 - idx))
+                    res = collect_star(cr, page, pid, star, quota, cfg["post_per_star"], say)
+                    box["stars"][star] = res
+                    remaining -= len(res["pre"])
+                    say(f"    {star}점: 이전 {len(res['pre'])}/{quota}"
+                        + (f" · 이후 {len(res['post'])}" if cfg["post_per_star"] else "") + f"  (요청 {res['requests']}회)")
+            else:
+                cr.warm_up(page)
+                for star in STARS:
+                    res = collect_star(cr, page, pid, star, cfg["per_star"], cfg["post_per_star"], say)
+                    box["stars"][star] = res
+                    say(f"    {star}점: 이전 {len(res['pre'])}/{cfg['per_star']}"
+                        + (f" · 이후 {len(res['post'])}/{cfg['post_per_star']}" if cfg["post_per_star"] else "")
+                        + f"  (요청 {res['requests']}회, {res['method']})")
+        except BaseException as e:  # Scrapling은 page_action 예외를 삼키므로 직접 보관
+            box["error"] = e
+        return page
+
+    throttle_wait()
+    resp = session.fetch(item["url"], page_action=action)
+    if getattr(resp, "status", 200) != 200:
+        raise Blocked(f"상품 페이지 HTTP {resp.status}")
+    if "error" in box:
+        raise box["error"]
+    collected_at = now_iso()
+    rows = [to_record(r, pid, box["name"], item.get("category", ""), collected_at)
+            for star in STARS for r in (box["stars"].get(star) or {}).get("pre", []) + (box["stars"].get(star) or {}).get("post", [])]
+    check = {k: v for k, v in box["check"].items() if k != "has_old"}
+    return {"name": box["name"], "check": check, "rows": rows}
+
+
+# ──────────────────────────────────────────────────────────────
+# 병렬 실행: 작업자(브라우저) N개 + 메인(저장 담당) 1개
+# ──────────────────────────────────────────────────────────────
+PROFILE_SKIP = shutil.ignore_patterns("Singleton*", "Cache", "Code Cache", "GPUCache", "*ShaderCache", "DawnGraphiteCache",
+                                      "DawnWebGPUCache", "GraphiteDawnCache", "GPUPersistentCache", "component_crx_cache",
+                                      "Crashpad", "BrowserMetrics*")
+
+
+def prepare_profile(base: Path, wid: int) -> Path:
+    """작업자마다 다른 Chrome 프로필(같은 프로필은 동시에 못 연다). 처음 한 번 원본을 복사해 쿠키를 이어받는다."""
+    if wid == 0:
+        return base
+    dst = base.with_name(f"{base.name}_w{wid}")
+    if not dst.exists() and base.exists():
+        try:
+            shutil.copytree(base, dst, ignore=PROFILE_SKIP)
+            say(f"브라우저 프로필 복사: {base} → {dst}")
+        except (OSError, shutil.Error) as e:
+            say(f"⚠ 프로필 복사 실패({e}) → 새 프로필로 시작")
+    return dst
+
+
+def nap(rng: tuple[float, float]) -> None:
+    end = time.time() + random.uniform(*rng)
+    while time.time() < end:
+        if _STOP is not None and _STOP.is_set():
+            return
+        time.sleep(0.2)
+
+
+def worker_main(wid: int, cfg: dict[str, Any], task_q: Any, result_q: Any, stop: Any, lock: Any, last: Any) -> None:
+    global _THROTTLE, _STOP, _PREFIX, CUTOFF
+    CUTOFF = date.fromisoformat(cfg["cutoff"])
+    _THROTTLE, _STOP, _PREFIX = (lock, last, cfg["min_interval"]), stop, (f"[W{wid + 1}] " if cfg["workers"] > 1 else "")
+    try:
+        cr = load_crawler()
+        cr.PROFILE_DIR = prepare_profile(Path(cr.PROFILE_DIR), wid)
+        with cr.open_session(headless=cfg["headless"]) as session:
+            while not stop.is_set():
+                item = task_q.get()
+                if item is None:
+                    break
+                result_q.put(("start", wid, item, None))
+                try:
+                    res = process_item(cr, session, item, cfg)
+                except Stopped:
+                    break
+                except Blocked as e:
+                    stop.set()
+                    result_q.put(("blocked", wid, item, str(e)))
+                    break
+                except Exception as e:
+                    result_q.put(("error", wid, item, f"{type(e).__name__}: {e}"[:300]))
+                    continue
+                result_q.put(("done", wid, item, res))
+                nap(PRODUCT_DELAY if any(r["period"] == "pre_chatgpt" for r in res["rows"]) else SKIP_DELAY)
+    except KeyboardInterrupt:
+        pass
+    except BaseException as e:  # 브라우저 실행 실패, 패키지 없음 등
+        result_q.put(("fatal", wid, None, f"{type(e).__name__}: {e}"[:500]))
+    finally:
+        result_q.put(("exit", wid, None, None))
+
+
+def run_items(items: list[dict[str, str]], cfg: dict[str, Any], store: Store) -> int:
+    """작업자들에게 상품을 나눠 주고, 끝난 상품을 받는 즉시 JSON 파일에 저장한다."""
+    import multiprocessing as mp
+
+    if not items:
+        print("새로 확인할 상품이 없어요.")
+        return 0
+    workers = max(1, min(cfg["workers"], MAX_WORKERS, len(items)))
+    cfg = {**cfg, "workers": workers, "cutoff": CUTOFF.isoformat()}
+    ctx = mp.get_context("spawn")
+    task_q, result_q, stop = ctx.Queue(), ctx.Queue(), ctx.Event()
+    lock, last = ctx.Lock(), ctx.Value("d", 0.0)
+    for it in items:
+        task_q.put(it)
+    for _ in range(workers):
+        task_q.put(None)
+    print(f"상품 {len(items)}개를 작업자 {workers}개로 수집해요 (요청 간격 최소 {cfg['min_interval']}초 · 저장: {store.path})")
+    procs = [ctx.Process(target=worker_main, args=(w, cfg, task_q, result_q, stop, lock, last), daemon=True) for w in range(workers)]
+    for pr in procs:
+        pr.start()
+    alive, started, finished = workers, 0, 0
+    totals: Counter[str] = Counter()
+    blocked = interrupted = False
+    try:
+        while alive:
+            kind, wid, item, payload = result_q.get()
+            tag = f"[W{wid + 1}] " if workers > 1 else ""
+            if kind == "exit":
+                alive -= 1
+            elif kind == "start":
+                started += 1
+                print(f"{tag}▶ [{started}/{len(items)}] {item['product_id']} {item.get('category') or ''} {item.get('name', '')[:30]}", flush=True)
+            elif kind == "done":
+                prod = store.put_product(item, {**payload, "worker": wid + 1})  # 상품 하나 끝날 때마다 바로 저장
+                finished += 1
+                n_pre = prod["counts"]["pre_chatgpt"]
+                totals[prod["status"]] += 1
+                totals["reviews"] += n_pre
+                totals["post"] += prod["counts"]["post_chatgpt"]
+                why = prod["check"].get("reason", "")
+                if n_pre:
+                    print(f"{tag}  ✓ {item['product_id']} 이전 리뷰 {n_pre}건 저장" + (f" ({why})" if why else ""), flush=True)
+                else:
+                    print(f"{tag}  – {item['product_id']} 건너뜀: {why or '과거 리뷰 없음'}", flush=True)
+            elif kind == "blocked":
+                blocked = True
+                print(f"{tag}⛔ 쿠팡이 자동 접근을 막았어요: {payload} → 모든 작업자를 멈춥니다(우회하지 않음).", flush=True)
+            elif kind == "error":
+                totals["error"] += 1
+                print(f"{tag}  ⚠ {item['product_id']} 실패(다음 실행 때 다시 시도): {payload}", flush=True)
+            elif kind == "fatal":
+                print(f"{tag}⚠ 작업자를 시작하지 못했어요: {payload}", flush=True)
+    except KeyboardInterrupt:
+        interrupted = True
+        stop.set()
+        print("\n중단 요청: 작업자를 멈춰요. 끝난 상품까지는 이미 저장돼 있어요.", flush=True)
+    finally:
+        for pr in procs:
+            pr.join(timeout=20)
+            if pr.is_alive():
+                pr.terminate()
+    print(f"\n{'중단' if (blocked or interrupted) else '완료'}: 수집 {totals['collected']}개 상품·이전 리뷰 {totals['reviews']}건"
+          + (f"·이후 {totals['post']}건" if totals["post"] else "")
+          + f", 과거 리뷰 없어 건너뜀 {totals['no_old']}개" + (f", 실패 {totals['error']}개" if totals["error"] else "")
+          + f" → {store.path}")
+    if blocked:
+        print("   시간이 지난 뒤 같은 명령을 다시 실행하면 끝난 상품은 건너뛰고 이어서 해요.")
+        return 2
+    return 130 if interrupted else 0
+
+
+def cmd_collect(args: argparse.Namespace) -> int:
     out_dir = Path(args.out) if args.out else OUT_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
+    store = Store(out_dir)
+    products = read_products(Path(args.products))
+    todo = [p for p in products if not store.is_done(p["product_id"])]
+    print(f"상품 {len(products)}개 / 완료 {len(products) - len(todo)}개 / 남은 {len(todo)}개 · 별점당 이전 {args.per_star}개, "
+          f"이후 {args.post_per_star}개 · 기준일 {CUTOFF}")
+    if args.max_products:
+        todo = todo[: args.max_products]
+    cfg = {"mode": "list", "per_star": args.per_star, "post_per_star": args.post_per_star, "per_product": 0,
+           "headless": args.headless, "workers": args.workers, "min_interval": args.min_interval}
+    return run_items(todo, cfg, store)
+
+
+def cmd_category(args: argparse.Namespace) -> int:
     cats = read_categories(args.targets, args.name)
     if not cats:
         print("수집할 카테고리가 없습니다. 파일의 '## 이름' 줄 아래에 카테고리 주소"
@@ -678,69 +920,36 @@ def cmd_category(args: argparse.Namespace) -> int:
         if other.exists() and "/np/categories/" in other.read_text(encoding="utf-8-sig"):
             print("  → training_products.txt 에 카테고리 주소가 들어 있어요. training_categories.txt 로 옮겨 주세요.")
         return 1
-    state = load_state(out_dir)
-    state.setdefault("categories", {})
-    out_file = out_dir / f"{datetime.now(KST):%Y%m%d_%H%M%S}.jsonl"
-    totals = Counter()  # type: Counter[str]
+    out_dir = Path(args.out) if args.out else OUT_DIR
+    store = Store(out_dir)
     print(f"카테고리 {len(cats)}개 · 상품당 최대 {args.per_product}개 · 기준일 {CUTOFF} 이전 · 목록 최대 {args.max_list_pages}페이지")
-    try:
-        with cr.open_session(headless=args.headless) as session:
-            for cat in cats:
-                key = cat["url"]
-                cached = state["categories"].get(key)
-                print(f"\n▶ 카테고리 [{cat['name'] or '이름 없음'}] {key}")
-                if cached and cached.get("products") and not args.relist:
-                    products = cached["products"]
-                    print(f"  저장된 상품 목록 {len(products)}개 사용 (--relist 로 다시 읽기)")
-                else:
-                    products = list_category(cr, session, key, args.max_list_pages)
-                    state["categories"][key] = {"name": cat["name"], "products": products, "listed_at": now_iso()}
-                    save_state(out_dir, state)
-                todo = [p for p in products if not state["products"].get(p["product_id"], {}).get("done")]
-                checked = len(products) - len(todo)
-                if args.max_products:
-                    todo = todo[: args.max_products]
-                print(f"  상품 {len(products)}개 / 확인 끝 {checked}개 / 이번에 {len(todo)}개")
-                for n, item in enumerate(todo, 1):
-                    item = {**item, "category": cat["name"]}
-                    print(f"  [{n}/{len(todo)}] {item['product_id']} {item.get('name', '')[:30]}", flush=True)
-                    box = check_and_collect(cr, session, item, args.per_product, args.post_per_star)
-                    chk = box.get("check", {})
-                    collected_at = now_iso()
-                    rows = []
-                    for star in STARS:
-                        res = box["stars"].get(star) or {"pre": [], "post": []}
-                        rows += [to_record(r, item["product_id"], box["name"], cat["name"], collected_at) for r in res["pre"] + res["post"]]
-                    if rows:
-                        with out_file.open("a", encoding="utf-8") as f:
-                            for row in rows:
-                                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                    pre = sum(1 for r in rows if r["period"] == "pre_chatgpt")
-                    status = "collected" if pre else "no_old"
-                    totals[status] += 1
-                    totals["reviews"] += pre
-                    state["products"][item["product_id"]] = {
-                        "done": True, "status": status, "name": box["name"], "category": cat["name"], "pre": pre,
-                        "post": sum(1 for r in rows if r["period"] == "post_chatgpt"),
-                        "per_star": {str(s): len((box["stars"].get(s) or {}).get("pre", [])) for s in STARS},
-                        "check": {k: v for k, v in chk.items() if k != "has_old"},
-                        "file": out_file.name if rows else None, "at": collected_at,
-                    }
-                    save_state(out_dir, state)
-                    if pre:
-                        print(f"    ✓ 이전 리뷰 {pre}건 수집 ({chk.get('reason', '')})", flush=True)
-                    else:
-                        print(f"    – 건너뜀: {chk.get('reason', '과거 리뷰 없음')}", flush=True)
-                    if n < len(todo):
-                        time.sleep(random.uniform(*(PRODUCT_DELAY if pre else SKIP_DELAY)))
-    except Blocked as e:
-        print(f"\n⛔ 쿠팡이 자동 접근을 막았어요: {e}\n   여기서 멈춥니다(우회하지 않음). 나중에 같은 명령을 다시 실행하면 이어서 해요.")
-        print(f"   이번 실행: 수집 {totals['collected']}개 상품·리뷰 {totals['reviews']}건, 건너뜀 {totals['no_old']}개")
-        return 2
-    where = f" → {out_file}" if out_file.exists() else ""
-    print(f"\n완료: 수집 {totals['collected']}개 상품·리뷰 {totals['reviews']}건, 과거 리뷰 없어 건너뜀 {totals['no_old']}개{where}")
-    return 0
-
+    # 1) 목록 읽기: 브라우저 하나로 차례대로 (저장된 목록이 있으면 재사용)
+    need = [c for c in cats if args.relist or store.listing(c["url"]) is None]
+    if need:
+        cr = load_crawler()
+        try:
+            with cr.open_session(headless=args.headless) as session:
+                for cat in need:
+                    print(f"\n▶ 카테고리 목록 [{cat['name'] or '이름 없음'}] {cat['url']}")
+                    store.set_listing(cat["url"], cat["name"], list_category(cr, session, cat["url"], args.max_list_pages))
+        except Blocked as e:
+            print(f"\n⛔ 쿠팡이 자동 접근을 막았어요: {e}\n   여기서 멈춥니다(우회하지 않음). 나중에 같은 명령을 다시 실행하면 이어서 해요.")
+            return 2
+    # 2) 상품 나눠 수집
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for cat in cats:
+        products = store.listing(cat["url"]) or []
+        todo = [p for p in products if not store.is_done(p["product_id"]) and p["product_id"] not in seen]
+        print(f"  [{cat['name'] or cat['url']}] 상품 {len(products)}개 / 확인 끝 {len(products) - len(todo)}개 / 남은 {len(todo)}개")
+        if args.max_products:
+            todo = todo[: args.max_products]
+        for p in todo:
+            seen.add(p["product_id"])
+            items.append({**p, "category": cat["name"]})
+    cfg = {"mode": "category", "per_product": args.per_product, "post_per_star": args.post_per_star, "per_star": 0,
+           "headless": args.headless, "workers": args.workers, "min_interval": args.min_interval}
+    return run_items(items, cfg, store)
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
@@ -842,27 +1051,20 @@ def print_table(title: str, counts: Counter[tuple[int, str]]) -> None:
 
 def cmd_stats(args: argparse.Namespace) -> int:
     out_dir = Path(args.out) if args.out else OUT_DIR
+    store = Store(out_dir)
     by_period: dict[str, Counter[tuple[int, str]]] = defaultdict(Counter)
     products: dict[str, set[str]] = defaultdict(set)
     categories: Counter[str] = Counter()
-    seen: set[str] = set()
     years: Counter[int] = Counter()
-    for f in sorted(out_dir.glob("*.jsonl")):
-        for line in f.read_text(encoding="utf-8").splitlines():
-            try:
-                r = json.loads(line)
-            except ValueError:
-                continue
-            if r["review_id"] in seen:
-                continue
-            seen.add(r["review_id"])
-            per = r.get("period") or "boundary"
-            by_period[per][(int(r["star"]), r.get("length_bucket") or length_bucket(r["content"]))] += 1
-            products[per].add(r["product_id"])
-            if per == "pre_chatgpt":
-                categories[r.get("category") or "(미지정)"] += 1
-                if r.get("created_at"):
-                    years[int(r["created_at"][:4])] += 1
+    for r in store.reviews():
+        per = r.get("period") or "boundary"
+        by_period[per][(int(r["star"]), r.get("length_bucket") or length_bucket(r["content"]))] += 1
+        products[per].add(r["product_id"])
+        if per == "pre_chatgpt":
+            categories[r.get("category") or "(미지정)"] += 1
+            if r.get("created_at"):
+                years[int(r["created_at"][:4])] += 1
+    print(f"파일: {store.path}")
     pre = by_period.get("pre_chatgpt", Counter())
     print_table(f"쿠팡 2022-11-30 이전 (H1 · 사람 후보) · 상품 {len(products.get('pre_chatgpt', set()))}개", pre)
     if years:
@@ -878,11 +1080,10 @@ def cmd_stats(args: argparse.Namespace) -> int:
             r = json.loads(line)
             nv[(int(r["star"]), r["length_bucket"])] += 1
         print_table("네이버 쇼핑 (H2 · 사람 후보)", nv)
-    st = load_state(out_dir)
-    if st.get("products"):
+    if store.data["products"]:
         per_cat: dict[str, Counter[str]] = defaultdict(Counter)
-        for info in st["products"].values():
-            per_cat[info.get("category") or "(미지정)"][info.get("status") or ("collected" if info.get("pre") else "no_old")] += 1
+        for info in store.data["products"].values():
+            per_cat[info.get("category") or "(미지정)"][info.get("status") or "?"] += 1
         print("\n[확인한 상품] 카테고리: 수집 / 과거 리뷰 없어 건너뜀")
         for cat, c in sorted(per_cat.items()):
             print(f"  {cat}: {c['collected']} / {c['no_old']}")
@@ -921,6 +1122,10 @@ def main(argv: list[str] | None = None) -> int:
     n = sub.add_parser("naver", help="네이버 쇼핑 리뷰 20만 건 내려받기·변환")
     n.add_argument("--force", action="store_true", help="이미 받은 파일이 있어도 다시 받기")
     sub.add_parser("stats", help="모인 데이터 양 보기")
+    for p in (c, g):
+        p.add_argument("--workers", type=int, default=1, help=f"동시에 띄울 브라우저 수 (기본 1, 최대 {MAX_WORKERS}, 권장 2~3)")
+        p.add_argument("--min-interval", type=float, default=MIN_INTERVAL,
+                       help=f"모든 브라우저를 합친 요청 사이 최소 간격(초, 기본 {MIN_INTERVAL})")
     for p in (c, g, n, sub.choices["stats"]):
         p.add_argument("--out", default="", help="결과 폴더 (기본 model/data/raw/…)")
     for p in sub.choices.values():  # --cutoff는 명령 앞·뒤 어디에 써도 된다

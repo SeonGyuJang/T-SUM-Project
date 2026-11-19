@@ -4,6 +4,8 @@
 # 수집용 Chrome 프로필: 쿠키·로그인 세션·방문 기록·캐시가 들어 있다 (coupang_reviews.py PROFILE_DIR)
 .browser_profile/
 **/.browser_profile/
+# 병렬 수집 작업자별 프로필 사본 (collect_training_data.py --workers)
+.browser_profile_w*/
 # 서비스용 수집기 결과: output/products/*.json, all_products.json, failed.txt, raw/debug/ (crawler_last.log, search_last.html 포함)
 output/
 # 이전 수집 시험(spike) 결과 HTML·리포트
@@ -12,6 +14,8 @@ var/
 model/data/
 model/artifacts/
 # 혹시 다른 위치에 생긴 수집 결과
+coupang_training.json
+*.json.tmp
 *.jsonl
 all_products.json
 failed.txt

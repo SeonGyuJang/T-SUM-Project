@@ -4,6 +4,7 @@
   FAKE_COUPANG_COUNTS  별점별 전체 리뷰 수 JSON (기본 {"5": 42, "4": 13, "3": 5, "2": 0, "1": 3})
   FAKE_COUPANG_COUNTS_BY_PID  상품별 위 값 {"상품ID": {...}}
   FAKE_COUPANG_BLOCK   "1"이면 상품 페이지가 HTTP 403
+  FAKE_COUPANG_BLOCK_PIDS  쉼표로 구분한 상품ID의 페이지만 HTTP 403
   FAKE_COUPANG_SEARCH  검색 결과 HTML 파일 경로
   FAKE_COUPANG_CRASH   값이 있으면 리뷰 API 호출 때 그 문구로 예외
   FAKE_COUPANG_MAX_PAGE  이 페이지를 넘으면 빈 목록 (쿠팡 페이지 상한 흉내)
@@ -131,6 +132,8 @@ class StealthySession:
 
     def fetch(self, url: str, page_action: Any = None, **_: Any) -> FakeResponse:
         if os.environ.get("FAKE_COUPANG_BLOCK") == "1":
+            return FakeResponse(url, 403)
+        if any(pid and pid in url for pid in (os.environ.get("FAKE_COUPANG_BLOCK_PIDS") or "").split(",")):
             return FakeResponse(url, 403)
         final = url.replace("https://link.coupang.com/a/fake", "https://www.coupang.com/vp/products/7777777777?itemId=1")
         page = FakePage(final)

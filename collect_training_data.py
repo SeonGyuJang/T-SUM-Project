@@ -36,6 +36,7 @@ model/MODEL_DEV.md 4.2(데이터 설계)의 원천 데이터를 모은다.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -514,6 +515,9 @@ def list_category(cr: Any, session: Any, url: str, max_pages: int) -> list[dict[
 
         def action(page: Any, _box: dict[str, Any] = box) -> Any:
             try:
+                # 상품 목록이 늦게 그려지는 화면: 상품 링크가 나타날 때까지 잠시 기다린다
+                with contextlib.suppress(Exception):
+                    page.wait_for_selector('a[href*="/vp/products/"]', timeout=12000)
                 cr.warm_up(page)
                 _box["html"] = page.content()
             except Exception as e:
@@ -528,12 +532,48 @@ def list_category(cr: Any, session: Any, url: str, max_pages: int) -> list[dict[
             raise Blocked("카테고리 목록 접근 거부")
         new = [p for p in parse_listing(html) if p["product_id"] not in products]
         print(f"  목록 {page_no}페이지: 새 상품 {len(new)}개", flush=True)
+        if not new and page_no == 1:
+            explain_empty_listing(url, html)
         if not new:
             break
         for p in new:
             products[p["product_id"]] = p
         time.sleep(random.uniform(*SKIP_DELAY))
     return list(products.values())
+
+
+def subcategory_links(html: str, url: str) -> list[tuple[str, str]]:
+    """페이지 안의 다른 카테고리 링크(번호, 이름). 이름이 있는 것만, 중복 없이."""
+    self_id = (re.search(r"/np/categories/(\d+)", url) or [None, ""])[1]
+    out: dict[str, str] = {}
+    for m in re.finditer(r'<a[^>]+href="[^"]*/np/categories/(\d+)[^"]*"[^>]*>(.*?)</a>', html, re.S | re.I):
+        cid, inner = m.group(1), re.sub(r"<[^>]+>", " ", m.group(2))
+        name = re.sub(r"\s+", " ", inner).strip()
+        if cid != self_id and name and len(name) <= 30 and cid not in out:
+            out[cid] = name
+    return list(out.items())
+
+
+def explain_empty_listing(url: str, html: str) -> None:
+    """목록에서 상품을 못 찾았을 때: 화면을 저장하고, 들어갈 수 있는 하위 카테고리를 보여 준다."""
+    d = OUT_DIR.parent.parent / "debug"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        cid = (re.search(r"/np/categories/(\d+)", url) or [None, "list"])[1]
+        path = d / f"category_{cid}_page1.html"
+        path.write_text(html, encoding="utf-8")
+        print(f"    · 받은 화면을 저장했어요: {path}  (화면 구조 확인용)")
+    except OSError:
+        pass
+    if len(html) < 2000:
+        print("    · 화면 내용이 거의 비어 있어요. 차단 화면이거나 로딩이 덜 된 것 같아요.")
+    subs = subcategory_links(html, url)
+    if subs:
+        print("    · 이 페이지는 상품 목록이 아니라 카테고리 홈인 것 같아요. 아래처럼 세부 카테고리 주소를 넣어 주세요:")
+        for cid, name in subs[:25]:
+            print(f"        {name}: https://www.coupang.com/np/categories/{cid}")
+        if len(subs) > 25:
+            print(f"        … 외 {len(subs) - 25}개")
 
 
 def old_review_check(cr: Any, page: Any, pid: str, log: Any) -> dict[str, Any]:
@@ -697,7 +737,8 @@ def cmd_category(args: argparse.Namespace) -> int:
         print(f"\n⛔ 쿠팡이 자동 접근을 막았어요: {e}\n   여기서 멈춥니다(우회하지 않음). 나중에 같은 명령을 다시 실행하면 이어서 해요.")
         print(f"   이번 실행: 수집 {totals['collected']}개 상품·리뷰 {totals['reviews']}건, 건너뜀 {totals['no_old']}개")
         return 2
-    print(f"\n완료: 수집 {totals['collected']}개 상품·리뷰 {totals['reviews']}건, 과거 리뷰 없어 건너뜀 {totals['no_old']}개 → {out_file}")
+    where = f" → {out_file}" if out_file.exists() else ""
+    print(f"\n완료: 수집 {totals['collected']}개 상품·리뷰 {totals['reviews']}건, 과거 리뷰 없어 건너뜀 {totals['no_old']}개{where}")
     return 0
 
 

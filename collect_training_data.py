@@ -305,6 +305,8 @@ def review_counts(rows: list[dict[str, Any]]) -> dict[str, Any]:
 _THROTTLE: Any = None   # (lock, 공유 시각 Value, 최소 간격 초) — 작업자 프로세스에서 설정
 _STOP: Any = None       # multiprocessing.Event — 한 작업자가 차단되면 모두 멈춘다
 _PREFIX = ""
+_SLOT: tuple[int, int] | None = None   # (작업자 번호, 작업자 수) — 창을 화면에 나란히 놓기 위함
+_PLACED = False
 
 
 class Stopped(Exception):
@@ -720,6 +722,7 @@ def process_item(cr: Any, session: Any, item: dict[str, str], cfg: dict[str, Any
 
     def action(page: Any) -> Any:
         try:
+            place_window(page)
             box["name"] = product_title(cr, page) or item.get("name") or ""
             if cfg["mode"] == "category":
                 chk = old_review_check(cr, page, pid, say)
@@ -770,18 +773,52 @@ PROFILE_SKIP = shutil.ignore_patterns("Singleton*", "Cache", "Code Cache", "GPUC
                                       "Crashpad", "BrowserMetrics*")
 
 
-def prepare_profile(base: Path, wid: int) -> Path:
-    """작업자마다 다른 Chrome 프로필(같은 프로필은 동시에 못 연다). 처음 한 번 원본을 복사해 쿠키를 이어받는다."""
-    if wid == 0:
-        return base
-    dst = base.with_name(f"{base.name}_w{wid}")
-    if not dst.exists() and base.exists():
+def place_window(page: Any) -> None:
+    """작업자 창을 화면에 나란히 배치한다(Scrapling은 모든 창을 같은 위치 0,0에 띄워서 겹쳐 보인다)."""
+    global _PLACED
+    if _PLACED or _SLOT is None or _SLOT[1] <= 1:
+        return
+    _PLACED = True
+    wid, n = _SLOT
+    try:
+        scr = page.evaluate("() => [screen.availWidth, screen.availHeight, screen.availLeft || 0, screen.availTop || 0]")
+        if not (isinstance(scr, list) and len(scr) == 4):
+            return
+        sw, sh, sl, st = (int(v) for v in scr)
+        cols = min(n, 2) if sw < 2200 else min(n, 3)
+        rows = math.ceil(n / cols)
+        w, h = max(600, sw // cols), max(500, sh // rows)
+        left, top = sl + (wid % cols) * (sw // cols), st + (wid // cols) * (sh // rows)
+        cdp = page.context.new_cdp_session(page)
+        win = cdp.send("Browser.getWindowForTarget")
+        cdp.send("Browser.setWindowBounds", {"windowId": win["windowId"], "bounds": {"windowState": "normal"}})
+        cdp.send("Browser.setWindowBounds", {"windowId": win["windowId"],
+                                             "bounds": {"left": left, "top": top, "width": w, "height": h}})
+    except Exception:
+        pass  # 창 배치는 보기 편하게 하려는 것일 뿐, 실패해도 수집은 계속한다
+
+
+def profile_path(base: Path, wid: int) -> Path:
+    return base if wid == 0 else base.with_name(f"{base.name}_w{wid}")
+
+
+def prepare_profiles(workers: int) -> None:
+    """작업자별 Chrome 프로필 사본을 작업자를 띄우기 전에 만든다(같은 프로필은 동시에 못 연다).
+    원본을 복사해 쿠키를 이어받는다. 캐시는 빼고 복사한다. 이미 있으면 그대로 쓴다."""
+    if workers <= 1:
+        return
+    base = Path(".browser_profile")
+    with contextlib.suppress(Exception):
+        base = Path(load_crawler().PROFILE_DIR)
+    for wid in range(1, workers):
+        dst = profile_path(base, wid)
+        if dst.exists() or not base.exists():
+            continue
+        print(f"  작업자 {wid + 1}용 브라우저 프로필 복사 중: {base} → {dst} (처음 한 번만)", flush=True)
         try:
             shutil.copytree(base, dst, ignore=PROFILE_SKIP)
-            say(f"브라우저 프로필 복사: {base} → {dst}")
         except (OSError, shutil.Error) as e:
-            say(f"⚠ 프로필 복사 실패({e}) → 새 프로필로 시작")
-    return dst
+            print(f"  ⚠ 일부 파일을 복사하지 못했어요({str(e)[:120]}). 그대로 진행해요.", flush=True)
 
 
 def nap(rng: tuple[float, float]) -> None:
@@ -793,13 +830,15 @@ def nap(rng: tuple[float, float]) -> None:
 
 
 def worker_main(wid: int, cfg: dict[str, Any], task_q: Any, result_q: Any, stop: Any, lock: Any, last: Any) -> None:
-    global _THROTTLE, _STOP, _PREFIX, CUTOFF
+    global _THROTTLE, _STOP, _PREFIX, _SLOT, CUTOFF
     CUTOFF = date.fromisoformat(cfg["cutoff"])
     _THROTTLE, _STOP, _PREFIX = (lock, last, cfg["min_interval"]), stop, (f"[W{wid + 1}] " if cfg["workers"] > 1 else "")
+    _SLOT = (wid, cfg["workers"])
     try:
         cr = load_crawler()
-        cr.PROFILE_DIR = prepare_profile(Path(cr.PROFILE_DIR), wid)
+        cr.PROFILE_DIR = profile_path(Path(cr.PROFILE_DIR), wid)  # 사본은 메인이 미리 만들어 둔다
         with cr.open_session(headless=cfg["headless"]) as session:
+            result_q.put(("ready", wid, None, str(cr.PROFILE_DIR)))
             while not stop.is_set():
                 item = task_q.get()
                 if item is None:
@@ -843,10 +882,11 @@ def run_items(items: list[dict[str, str]], cfg: dict[str, Any], store: Store) ->
     for _ in range(workers):
         task_q.put(None)
     print(f"상품 {len(items)}개를 작업자 {workers}개로 수집해요 (요청 간격 최소 {cfg['min_interval']}초 · 저장: {store.path})")
+    prepare_profiles(workers)
     procs = [ctx.Process(target=worker_main, args=(w, cfg, task_q, result_q, stop, lock, last), daemon=True) for w in range(workers)]
     for pr in procs:
         pr.start()
-    alive, started, finished = workers, 0, 0
+    alive, started, finished, ready = workers, 0, 0, 0
     totals: Counter[str] = Counter()
     blocked = interrupted = False
     try:
@@ -876,6 +916,9 @@ def run_items(items: list[dict[str, str]], cfg: dict[str, Any], store: Store) ->
             elif kind == "error":
                 totals["error"] += 1
                 print(f"{tag}  ⚠ {item['product_id']} 실패(다음 실행 때 다시 시도): {payload}", flush=True)
+            elif kind == "ready":
+                ready += 1
+                print(f"{tag}브라우저 준비됨 ({ready}/{workers}) · 프로필 {payload}", flush=True)
             elif kind == "fatal":
                 print(f"{tag}⚠ 작업자를 시작하지 못했어요: {payload}", flush=True)
     except KeyboardInterrupt:
@@ -926,6 +969,8 @@ def cmd_category(args: argparse.Namespace) -> int:
     # 1) 목록 읽기: 브라우저 하나로 차례대로 (저장된 목록이 있으면 재사용)
     need = [c for c in cats if args.relist or store.listing(c["url"]) is None]
     if need:
+        if args.workers > 1:
+            print(f"  ※ 카테고리 목록 {len(need)}개는 브라우저 1개로 차례대로 읽어요. 다 읽으면 작업자 {args.workers}개가 동시에 상품을 확인해요.")
         cr = load_crawler()
         try:
             with cr.open_session(headless=args.headless) as session:

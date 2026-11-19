@@ -138,7 +138,11 @@ def read_products(path: Path) -> list[dict[str, str]]:
             continue
         m = re.search(r"/products/(\d+)", line)
         if not m:
-            print(f"  ⚠ {line_no}번째 줄 건너뜀 (상품 페이지 주소가 아님): {line[:80]}")
+            if "/np/categories/" in line or "/np/search" in line:
+                print(f"  ⚠ {line_no}번째 줄은 카테고리·검색 주소예요 → training_categories.txt 에 넣고 "
+                      f"`python collect_training_data.py category training_categories.txt` 로 실행하세요: {line[:80]}")
+            else:
+                print(f"  ⚠ {line_no}번째 줄 건너뜀 (상품 페이지 주소가 아님): {line[:80]}")
             continue
         if m.group(1) in seen:
             continue
@@ -611,6 +615,9 @@ def read_categories(args_targets: list[str], name: str) -> list[dict[str, str]]:
                 if line.startswith("##"):
                     current = line.lstrip("#").strip()
                 elif line.startswith("http"):
+                    if "/vp/products/" in line:
+                        print(f"  ⚠ 상품 주소는 training_products.txt 에 넣고 collect 명령으로 수집하세요: {line[:80]}")
+                        continue
                     out.append({"name": current or name, "url": line.split()[0]})
         elif t.startswith("http"):
             out.append({"name": name, "url": t})
@@ -625,7 +632,11 @@ def cmd_category(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     cats = read_categories(args.targets, args.name)
     if not cats:
-        print("수집할 카테고리가 없습니다.")
+        print("수집할 카테고리가 없습니다. 파일의 '## 이름' 줄 아래에 카테고리 주소"
+              "(https://www.coupang.com/np/categories/숫자)를 한 줄에 하나씩 넣어 주세요.")
+        other = ROOT / "training_products.txt"
+        if other.exists() and "/np/categories/" in other.read_text(encoding="utf-8-sig"):
+            print("  → training_products.txt 에 카테고리 주소가 들어 있어요. training_categories.txt 로 옮겨 주세요.")
         return 1
     state = load_state(out_dir)
     state.setdefault("categories", {})
@@ -646,9 +657,10 @@ def cmd_category(args: argparse.Namespace) -> int:
                     state["categories"][key] = {"name": cat["name"], "products": products, "listed_at": now_iso()}
                     save_state(out_dir, state)
                 todo = [p for p in products if not state["products"].get(p["product_id"], {}).get("done")]
+                checked = len(products) - len(todo)
                 if args.max_products:
                     todo = todo[: args.max_products]
-                print(f"  상품 {len(products)}개 / 확인 끝 {len(products) - len(todo)}개 / 이번에 {len(todo)}개")
+                print(f"  상품 {len(products)}개 / 확인 끝 {checked}개 / 이번에 {len(todo)}개")
                 for n, item in enumerate(todo, 1):
                     item = {**item, "category": cat["name"]}
                     print(f"  [{n}/{len(todo)}] {item['product_id']} {item.get('name', '')[:30]}", flush=True)

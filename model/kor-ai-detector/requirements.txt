@@ -1,0 +1,8 @@
+torch>=2.1
+transformers>=4.46
+datasets>=2.19
+accelerate>=0.30
+numpy
+# XDAC 기준선(xdac_baseline.py)을 돌릴 때만 필요
+huggingface_hub
+captum

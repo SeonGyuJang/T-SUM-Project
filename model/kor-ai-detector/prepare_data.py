@@ -4,10 +4,10 @@
   {"id", "text", "label"(0=사람, 1=AI), "domain"("comment"|"review"),
    "platform", "generator", "group", + 원본의 rating/category/prompt_type/date (있으면)}
 
-사용 예:
+사용 예 (XDAC 공개 LGC는 AI 댓글 2,000건뿐 → --lgc-all-ai, 학습엔 안 쓰고 추가 테스트셋 lgc_ai_test.jsonl로):
   python prepare_data.py \
     --lgc ../data/raw/XDAC_obs/LGC_data/LGC_data_v1.0.json \
-    --lgc-text-field text --lgc-label-field label --lgc-ai-values 1 \
+    --lgc-all-ai --lgc-text-field generated_comment --lgc-generator-field llm_model_family \
     --human-reviews data/raw/naver_human.csv \
     --ai-reviews data/raw/ai_chatgpt.jsonl data/raw/ai_claude.jsonl data/raw/ai_gemini.jsonl \
     --human-before 2022-12-01 \
@@ -138,8 +138,20 @@ def inspect_lgc(path, n=3):
         vals = Counter(str(r.get(k)) for r in rows[:200000])
         if len(vals) <= 20:
             print(f"  {k}: {dict(vals.most_common(20))}")
+    if looks_ai_only_xdac(rows, keys):
+        print(f"\n[판단] 이 파일은 사람/AI 라벨 필드가 없고 모든 레코드에 생성 모델(llm_model_family)이 적혀 있습니다.\n"
+              f"  → AI가 만든 뉴스 댓글 {len(rows):,}건만 든 공개 샘플입니다(논문의 사람 130만 + AI 100만 전체가 아님).\n"
+              f"  → 사람 댓글이 없어 1단계(댓글) 학습은 할 수 없습니다. 2단계 리뷰 학습을 바로 하고, 이 파일은 'AI 댓글을 잡는지' 보는 추가 테스트로 씁니다:\n"
+              f"     --lgc {path} --lgc-all-ai --lgc-text-field generated_comment --lgc-generator-field llm_model_family")
+        return
     print("\n→ 본문 필드는 --lgc-text-field, 사람/AI 구분 필드는 --lgc-label-field, AI를 뜻하는 값은 --lgc-ai-values,"
-          " 생성 모델 필드는 --lgc-generator-field, 기사 ID 필드는 --lgc-group-field 로 지정하세요.")
+          " 생성 모델 필드는 --lgc-generator-field, 기사 ID 필드는 --lgc-group-field 로 지정하세요."
+          " 사람/AI 구분 필드 없이 전부 AI 글이면 --lgc-all-ai.")
+
+
+def looks_ai_only_xdac(rows, keys):
+    """XDAC_obs 공개 LGC_data_v1.0.json: generated_comment + llm_model_family만 있고 사람 댓글이 없다."""
+    return "generated_comment" in keys and "llm_model_family" in keys and all(r.get("llm_model_family") for r in rows)
 
 
 def build_lgc_rows(args, stats):
@@ -147,14 +159,18 @@ def build_lgc_rows(args, stats):
     rows = []
     seen_labels = Counter()
     for i, r in enumerate(read_any(args.lgc)):
-        if args.lgc_text_field not in r or args.lgc_label_field not in r:
+        if args.lgc_text_field not in r or (not args.lgc_all_ai and args.lgc_label_field not in r):
+            hint = ""
+            if "generated_comment" in r and "llm_model_family" in r:
+                hint = (" (XDAC 공개 파일이면: --lgc-all-ai --lgc-text-field generated_comment"
+                        " --lgc-generator-field llm_model_family)")
             raise KeyError(
                 f"LGC 레코드에 '{args.lgc_text_field}' 또는 '{args.lgc_label_field}' 필드가 없습니다. "
-                f"첫 레코드의 필드: {list(r.keys())} → --lgc-text-field / --lgc-label-field 로 지정하세요."
+                f"첫 레코드의 필드: {list(r.keys())} → --lgc-text-field / --lgc-label-field 로 지정하세요.{hint}"
             )
-        raw_label = str(r[args.lgc_label_field]).strip().lower()
+        raw_label = "ai(--lgc-all-ai)" if args.lgc_all_ai else str(r[args.lgc_label_field]).strip().lower()
         seen_labels[raw_label] += 1
-        label = 1 if raw_label in ai_values else 0
+        label = 1 if args.lgc_all_ai or raw_label in ai_values else 0
         gen = "human"
         if label == 1:
             gen = str(r.get(args.lgc_generator_field) or "lgc-llm").strip().lower() if args.lgc_generator_field else "lgc-llm"
@@ -325,6 +341,8 @@ def main():
                     help="라벨 필드에서 AI를 뜻하는 값들(쉼표 구분, 대소문자 무시). 나머지는 사람으로 처리")
     ap.add_argument("--lgc-generator-field", default=None, help="LGC에서 생성 모델명이 든 필드 (있으면)")
     ap.add_argument("--lgc-group-field", default=None, help="LGC에서 기사 ID 등 묶음 기준 필드 (있으면)")
+    ap.add_argument("--lgc-all-ai", action="store_true",
+                    help="라벨 필드 없이 모든 LGC 레코드를 AI로 봄 (XDAC 공개 샘플). 사람 댓글이 없으면 1단계 대신 lgc_ai_test.jsonl만 만든다")
     ap.add_argument("--inspect-lgc", action="store_true", help="LGC 파일 구조(필드·라벨 값)만 출력하고 종료")
     ap.add_argument("--newlines", choices=["auto", "keep", "space"], default="auto",
                     help="리뷰 줄바꿈 처리. auto: 사람/AI 한쪽에만 줄바꿈이 있으면 양쪽 모두 공백으로(지름길 방지)")
@@ -367,12 +385,20 @@ def main():
     # ---------- Stage 1: LGC 댓글 ----------
     if args.lgc:
         lgc = filter_and_dedupe(build_lgc_rows(args, stats), args, stats, "lgc")
-        ratios = [float(x) for x in args.stage1_ratios.split(",")]
-        sp = group_split(lgc, ratios, rng)
-        print("[Stage 1] LGC 댓글")
-        for k in ("train", "val", "test"):
-            write_jsonl(os.path.join(args.out, f"stage1_{k}.jsonl"), sp[k], rng)
-            summary[f"stage1_{k}"] = summarize(f"stage1_{k}", sp[k])
+        if len({r["label"] for r in lgc}) < 2:
+            # 사람 댓글이 없으면 분류 학습이 안 된다 → 학습에 섞지 않고 'AI 댓글을 얼마나 잡나'만 보는 테스트셋으로
+            only = "AI" if lgc and lgc[0]["label"] == 1 else "사람"
+            print(f"[LGC] {only} 댓글만 {len(lgc):,}건 → 1단계 학습 데이터를 만들지 않고 lgc_ai_test.jsonl(추가 테스트)만 씁니다.")
+            print("      (2단계는 KcELECTRA 원본에서 바로 리뷰로 학습. 평가 때 --test 에 넣으면 생성 모델별 탐지율(TPR)이 나옵니다)")
+            write_jsonl(os.path.join(args.out, "lgc_ai_test.jsonl"), lgc, rng)
+            summary["lgc_ai_test"] = summarize("lgc_ai_test", lgc)
+        else:
+            ratios = [float(x) for x in args.stage1_ratios.split(",")]
+            sp = group_split(lgc, ratios, rng)
+            print("[Stage 1] LGC 댓글")
+            for k in ("train", "val", "test"):
+                write_jsonl(os.path.join(args.out, f"stage1_{k}.jsonl"), sp[k], rng)
+                summary[f"stage1_{k}"] = summarize(f"stage1_{k}", sp[k])
 
     # ---------- Stage 2: 리뷰 ----------
     if args.human_reviews or args.ai_reviews:

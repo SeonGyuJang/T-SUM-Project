@@ -49,7 +49,7 @@ def xdac_path_from_module(d):
             spec = importlib.util.spec_from_file_location("xdac_encrypted", mod_file)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
-        print("  · get_xdac_path() 호출 중… (처음이면 XDAC 쪽에서 데이터·모델을 내려받아 시간이 걸릴 수 있어요)", flush=True)
+        print("  · get_xdac_path() 호출 중… 암호화된 XDAC 데이터·모델을 임시 폴더에 푸는 중이라 몇 분 멈춘 것처럼 보일 수 있어요(끄지 마세요)", flush=True)
         path = mod.get_xdac_path()
         print(f"  · get_xdac_path() → {path}")
         return str(path)

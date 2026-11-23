@@ -17,24 +17,30 @@
 ```
 [한국어 인코더 모델]  beomi/KcELECTRA-base-v2022 (기본값)
         │
-        ▼  1단계 파인튜닝: LGC 뉴스 댓글 (사람 130만 + AI 100만, 14개 LLM)
-[댓글 탐지 모델]  → 짧은 구어체 한국어에서 "AI 말투"를 학습
+        ▼  (1단계 LGC 댓글 학습은 생략 — 아래 ※)
         │
-        ▼  2단계 파인튜닝: 리뷰 데이터 (네이버/쿠팡 사람 리뷰 + 팀 생성 AI 리뷰)
-        │                  + LGC 댓글 15% 섞기(이전 학습 내용 망각 방지)
+        ▼  리뷰 파인튜닝: 네이버/쿠팡 사람 리뷰 + 팀 생성 AI 리뷰
 [리뷰 탐지 모델]  → 최종 모델
         │
         ▼  평가: 검증셋에서 임계값 결정 → 여러 테스트셋에서 성능 확인
         │        XDAC-D(공개 모델)를 같은 기준으로 돌려 비교
+        │        LGC AI 댓글 2,000건으로 "리뷰 밖의 AI 글"도 잡는지 추가 확인
 ```
+
+> ※ **1단계를 생략한 이유**: 원래 계획은 LGC(사람 130만 + AI 100만)로 먼저 학습하는 것이었지만, XDAC_obs가 실제로 공개한
+> `LGC_data_v1.0.json`은 **AI 댓글 2,000건 샘플뿐**이고 사람 댓글·라벨 필드가 없습니다(2026-11 확인, 14개 필드:
+> `generated_comment`, `llm_model_family` 등). 한쪽 라벨만으로는 분류 학습이 안 되므로 KcELECTRA 원본에서 바로 리뷰로
+> 학습합니다. KcELECTRA는 이미 네이버 뉴스 댓글로 사전학습되어 있어 구어체 적응은 기본으로 됩니다.
+> 2,000건은 학습에 섞지 않고(뉴스 주제가 "AI 신호"로 오학습될 위험) 추가 테스트셋 `lgc_ai_test.jsonl`로만 씁니다.
+> 전체 LGC를 구하면(저자 문의) `--lgc-label-field …`로 1단계를 다시 켤 수 있습니다.
 
 ### 1.3 왜 이 구조인가
 | 결정 | 이유 |
 |---|---|
 | 생성형 LLM이 아닌 **인코더 분류 모델** | 리뷰는 짧고 대량이라 빠르고 저렴한 모델이 유리. 인코더가 문장을 벡터로 만들고, 그 위의 분류층이 `P(AI)`를 냅니다. |
 | **KcELECTRA** 기본 사용 | 네이버 뉴스 댓글 같은 구어체·이모지·신조어 위주로 사전학습되어 댓글·리뷰 문체와 잘 맞습니다. 성능이 부족하면 `klue/roberta-large`로 바꿔 비교하세요. |
-| XDAC 모델을 **직접 파인튜닝하지 않음** | XDAC는 가중치가 암호화된 모듈(`xdac_encrypted.py`)로 배포되어 추론만 됩니다. 대신 XDAC가 공개한 **LGC 데이터**로 우리 모델을 학습하고, XDAC-D는 비교용 기준선으로만 씁니다. |
-| **2단계** 학습 | LGC(댓글)는 양이 많아 "AI 말투" 기본기를 잡기 좋고, 리뷰 데이터는 실제 목표 도메인에 맞추는 역할을 합니다. |
+| XDAC 모델을 **직접 파인튜닝하지 않음** | XDAC는 가중치가 암호화된 모듈(`xdac_encrypted.py`)로 배포되어 추론만 됩니다. XDAC-D는 비교용 기준선으로만 쓰고, 공개된 LGC 샘플(AI 댓글 2,000건)은 추가 테스트로 씁니다. |
+| **리뷰만으로** 학습 | 원래는 LGC 댓글로 기본기를 잡고 리뷰로 맞출 계획이었으나 공개 LGC에 사람 댓글이 없어 리뷰 학습만 합니다. `train.py --replay`는 전체 LGC를 구했을 때를 위해 남겨 둡니다. |
 | 사람 데이터만이 아니라 **AI 리뷰도 함께** 2단계에 투입 | 이진 분류는 두 클래스가 모두 있어야 학습됩니다. 같은 도메인의 AI 리뷰가 없으면 모델이 "댓글 vs 리뷰"를 구분하는 쪽으로 잘못 학습됩니다. |
 
 ---
@@ -81,7 +87,7 @@ python tests/smoke_test.py      # 데이터 처리·평가 로직 점검 (GPU·�
 
 | 데이터 | 상태 | 라벨 | 쓰임 |
 |---|---|---|---|
-| LGC 뉴스 댓글 | 준비됨 | 사람 + AI | 1단계 학습, 2단계 replay |
+| LGC 뉴스 댓글 | 받음 (공개 샘플) | **AI만 2,000건** (8개 모델군) | 추가 테스트 `lgc_ai_test.jsonl` (학습엔 안 씀) |
 | 네이버 쇼핑 리뷰 | 준비됨 | 사람 | 2단계 학습·검증·테스트 |
 | 쿠팡 리뷰 | 수집 중 | 사람 | 처음엔 **플랫폼 교차 테스트 전용**, 이후 학습에 합류 |
 | 팀 생성 AI 리뷰 | 생성 예정 | AI | 2단계 학습·검증·테스트 (ChatGPT, Claude, Gemini) |
@@ -165,8 +171,8 @@ pprint(dataset_LGC[0]); pprint(dataset_LGC[-1])
 ```bash
 python prepare_data.py \
   --lgc ../data/raw/XDAC_obs/LGC_data/LGC_data_v1.0.json \
-  --lgc-text-field <본문필드> --lgc-label-field <라벨필드> --lgc-ai-values <AI값> \
-  --human-reviews data/raw/naver_human.csv \
+  --lgc-all-ai --lgc-text-field generated_comment --lgc-generator-field llm_model_family \
+  --human-reviews data/raw/naver_human.jsonl \
   --ai-reviews data/raw/ai_chatgpt.jsonl data/raw/ai_claude.jsonl data/raw/ai_gemini.jsonl \
   --human-before 2022-12-01 \
   --holdout-generators gemini \
@@ -185,7 +191,8 @@ python prepare_data.py \
 
 | 파일 | 내용 |
 |---|---|
-| `stage1_{train,val,test}.jsonl` | LGC 댓글 (90/5/5) |
+| `lgc_ai_test.jsonl` | 공개 LGC의 AI 댓글 전부 (`--lgc-all-ai`, 테스트 전용) |
+| `stage1_{train,val,test}.jsonl` | 사람·AI가 모두 있는 전체 LGC를 넣었을 때만 생성 (90/5/5) |
 | `stage2_{train,val,test}.jsonl` | 리뷰 (상품 단위 80/10/10, holdout 모델·테스트 전용 플랫폼 제외) |
 | `stage2_test_unseen_gen.jsonl` | 테스트 상품의 사람 리뷰 + holdout 모델 AI 리뷰 |
 | `stage2_test_xplatform.jsonl` | 테스트 전용 플랫폼(예: 쿠팡)의 전체 리뷰 |
@@ -199,7 +206,8 @@ python prepare_data.py \
 
 ## 5. 학습
 
-### 5.1 1단계: LGC 댓글
+### 5.1 (보류) 1단계: LGC 댓글
+> 공개 LGC에는 사람 댓글이 없어 지금은 실행하지 않습니다(1.2의 ※). 사람·AI가 모두 든 전체 LGC를 구했을 때만 쓰세요.
 
 ```bash
 python train.py \
@@ -215,20 +223,20 @@ python train.py \
 - 댓글은 짧으므로 `--max-len 128`로 속도를 아낍니다.
 - 먼저 `--max-train-samples 50000`으로 짧게 돌려 파이프라인과 손실 감소를 확인한 뒤 전체 학습을 돌리세요.
 
-### 5.2 2단계: 리뷰
+### 5.2 리뷰 학습 (지금의 본 학습)
 
 ```bash
 python train.py \
-  --model models/stage1 \
+  --model beomi/KcELECTRA-base-v2022 \
   --train data/processed/stage2_train.jsonl \
   --val   data/processed/stage2_val.jsonl \
-  --replay data/processed/stage1_train.jsonl --replay-ratio 0.15 \
   --out   models/stage2 \
   --epochs 3 --lr 2e-5 --batch-size 32 --max-len 256 --fp16
 ```
 
-- `--replay`: 최종 학습셋의 15%를 LGC 댓글로 채워 1단계 지식이 지워지는 것을 막습니다. 10~20% 범위에서 조정하세요.
-- 2단계는 1단계보다 학습률을 낮게 잡습니다. 검증 AUROC가 2번 연속 오르지 않으면 자동으로 멈춥니다(`--early-stopping 2`).
+- 데이터가 수천 건 규모라 RTX 3060에서 수 분, 맥북(MPS)에서도 수십 분 안팎입니다(`--fp16`은 CUDA에서만 켜짐).
+- 전체 LGC로 1단계를 했다면 `--model models/stage1 --replay data/processed/stage1_train.jsonl --replay-ratio 0.15`.
+- 검증 AUROC가 2번 연속 오르지 않으면 자동으로 멈춥니다(`--early-stopping 2`).
 - 학습 결과 폴더에는 모델, 토크나이저, `train_config.json`(설정과 검증 지표)이 저장됩니다.
 
 ### 5.3 주요 옵션
@@ -244,8 +252,8 @@ python train.py \
 | `--max-train-samples` | 없음 | 빠른 점검용 샘플 제한 |
 
 ### 5.4 실험 순서 (권장)
-1. **1단계 학습** → `stage1_test`로 댓글 도메인 성능 확인
-2. **1단계 모델을 리뷰에 바로 평가** (2단계 전) → 도메인 차이가 얼마나 큰지 파악
+1. **파일럿**: 생성 모델마다 AI 리뷰 100~200건만으로 prepare → 학습 → 평가를 한 번 돌려 지름길 점검·파이프라인 확인
+2. **XDAC-D 기준선**을 같은 테스트셋에 돌려 비교 (`xdac_baseline.py`)
 3. **leave-one-generator-out 3회**: `--holdout-generators`를 `chatgpt`, `claude`, `gemini`로 바꿔 가며 prepare → 2단계 학습 → 평가
 4. **최종 모델**: holdout 없이 3개 모델군 전부로 2단계 학습
 5. **쿠팡 합류 전후 비교**: 쿠팡 교차 테스트 성능을 확인한 뒤 학습에 추가해 재학습

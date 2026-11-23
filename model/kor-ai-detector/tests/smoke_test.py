@@ -192,6 +192,25 @@ def test_inspect_lgc():
     print("✓ LGC 구조 확인(--inspect-lgc)")
 
 
+def test_lgc_ai_only():
+    """XDAC 공개 LGC(AI 댓글만, 라벨 필드 없음) → 1단계 없이 lgc_ai_test.jsonl만."""
+    with tempfile.TemporaryDirectory() as d:
+        recs = [{"idx": i, "llm_model_family": ["GPT", "Claude", "Gemma"][i % 3], "temperature": 0.3,
+                 "generated_comment": f"이 소식 듣고 기분이 좋네요 {i}"} for i in range(30)]
+        with open(os.path.join(d, "lgc.json"), "w", encoding="utf-8") as f:
+            json.dump(recs, f, ensure_ascii=False)
+        out = run("prepare_data.py", "--lgc", os.path.join(d, "lgc.json"), "--inspect-lgc")
+        assert "--lgc-all-ai" in out and "1단계(댓글) 학습은 할 수 없습니다" in out, out
+        o = os.path.join(d, "out")
+        out = run("prepare_data.py", "--lgc", os.path.join(d, "lgc.json"), "--lgc-all-ai",
+                  "--lgc-text-field", "generated_comment", "--lgc-generator-field", "llm_model_family", "--out", o)
+        rows = load(os.path.join(o, "lgc_ai_test.jsonl"))
+        assert len(rows) == 30 and all(r["label"] == 1 for r in rows), rows[:2]
+        assert {r["generator"] for r in rows} == {"gpt", "claude", "gemma"}
+        assert not os.path.exists(os.path.join(o, "stage1_train.jsonl"))
+    print("✓ AI 댓글만 있는 LGC → lgc_ai_test.jsonl")
+
+
 def test_convert_and_tasks():
     with tempfile.TemporaryDirectory() as d:
         nv = os.path.join(d, "naver.jsonl")
@@ -242,6 +261,7 @@ if __name__ == "__main__":
     test_thresholds_and_verdict()
     test_compile()
     test_inspect_lgc()
+    test_lgc_ai_only()
     test_newlines_auto()
     test_convert_and_tasks()
     test_prepare_and_evaluate()

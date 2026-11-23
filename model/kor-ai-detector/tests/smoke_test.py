@@ -306,7 +306,27 @@ def test_fill_ai_tasks():
         run("make_ai_tasks.py", "merge", path, "--out", d)
         assert len(load(os.path.join(d, "ai_claude.jsonl"))) == 6
         assert "실제 답한 모델" in out
-    print("✓ fill_ai_tasks(빈 칸만 채우기·모델 번갈아·거절 기록·이어서 하기)")
+    # 붐비는 모델은 2번 연달아 실패하면 이번 실행에서 건너뛰고, 다른 모델은 계속
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "tasks_gemini.csv")
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["task_id", "generator", "product_id", "prompt", "text"])
+            for i in range(12):
+                w.writerow([f"gemini-{i:05d}", "gemini", f"p{i}", f"리뷰 써 줘 {i}", ""])
+        os.environ["FILL_RETRY_BASE_S"] = "0.01"
+        try:
+            out = run("fill_ai_tasks.py", path, "--provider", "fake", "--models", "ok-model", "busy-model", "--concurrency", "1")
+        finally:
+            os.environ.pop("FILL_RETRY_BASE_S", None)
+        rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
+        ok = [r for i, r in enumerate(rows) if i % 2 == 0]
+        busy = [r for i, r in enumerate(rows) if i % 2 == 1]
+        assert all(r["text"] for r in ok), ok                                         # 다른 모델은 끝까지 채움
+        assert not any(r["text"] for r in busy) and all(r["api_note"] for r in busy)  # 붐비는 모델 행은 기록만
+        assert "⏸ busy-model" in out and "--retry-failed" in out, out
+    print("✓ fill_ai_tasks(빈 칸만 채우기·모델 번갈아·거절 기록·이어서 하기·붐비는 모델 건너뛰기)")
+
 
 
 def test_anchor_mix_and_matching():

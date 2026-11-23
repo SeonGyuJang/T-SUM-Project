@@ -36,6 +36,8 @@ INSTALL = {"anthropic": "anthropic", "openai": "openai", "google": "google-genai
 # 서버 쪽 거절 시 다른 모델로 이어 주는 기능(fallbacks)을 받는 Claude 모델
 CLAUDE_FALLBACK_MODELS = {"claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 FATAL_STATUS = {400, 401, 403, 404}
+RETRY_BASE_S = float(os.environ.get("FILL_RETRY_BASE_S", "10"))  # 재시도 대기(초). 테스트에서만 줄임
+BUSY_NOTES = {"error(503)", "error(429)", "error(504)", "error(500)", "error(502)"}
 TIMEOUT_S = 120  # 요청 하나가 이보다 오래 걸리면 끊고 다시 (SDK 기본값은 10분)
 # brotli(br) 압축 응답을 받지 않는다: 오래된 brotli 패키지가 깔린 환경(예: conda base)에서는 압축을 풀다가
 # "Decompressor.decompress() got an unexpected keyword argument 'output_buffer_limit'"로 실패하고
@@ -61,6 +63,11 @@ TEXT_REFUSAL = re.compile(
 
 def looks_refused(text):
     return bool(text) and bool(TEXT_REFUSAL.search(text))
+
+
+class FakeBusy(Exception):
+    """테스트용: 서버 혼잡(503)."""
+    status_code = 503
 
 
 class Fatal(Exception):
@@ -108,6 +115,8 @@ class Caller:
 
     def _raw(self, model, prompt):
         if self.provider == "fake":  # 테스트용
+            if model == "busy-model":
+                raise FakeBusy()
             if "말로 거절" in prompt:
                 return "이 요청은 가짜 리뷰를 만드는 일이라 도와드리기 어렵습니다.", model, ""
             if "거절" in prompt:
@@ -187,7 +196,7 @@ def call_with_retry(caller, model, prompt, tries=3, log=print, tag=""):
             if attempt == tries - 1:
                 log(f"  ✗ {tag} {describe(e)[:160]} → 건너뜀")
                 return None, model, f"error({status_of(e) or type(e).__name__})"
-            wait_s = min(60, 10 * 2 ** attempt)
+            wait_s = min(60, RETRY_BASE_S * 2 ** attempt)
             log(f"  ↻ {tag} {describe(e)[:120]} → {wait_s}초 뒤 다시")
             time.sleep(wait_s)
     return None, model, "error"
@@ -234,6 +243,7 @@ def main():
     ap.add_argument("--save-every", type=int, default=10)
     ap.add_argument("--retry-failed", action="store_true", help="거절·오류로 넘어간 행(api_note 있음)도 다시 시도")
     ap.add_argument("--max-errors", type=int, default=20, help="오류가 이만큼 연달아 나면 멈춤")
+    ap.add_argument("--busy-limit", type=int, default=2, help="한 모델이 붐빔(503·429·504)으로 이만큼 연달아 실패하면 이번 실행에서 그 모델은 건너뜀")
     ap.add_argument("--dry-run", action="store_true", help="API 호출 없이 프롬프트 2개만 출력")
     ap.add_argument("--no-system", action="store_true",
                     help="연구 목적 안내(시스템 프롬프트)를 빼고 보냄 — 손으로 채팅창에 붙여 넣는 것과 같은 조건")
@@ -301,7 +311,7 @@ def main():
         else:
             r["api_note"] = note
             stats[note.split("(")[0]] += 1
-            state["streak"] = state["streak"] + 1 if note.startswith("error") else 0
+            state["streak"] = state["streak"] + 1 if note.startswith("error") and note not in BUSY_NOTES else 0
         state["since_save"] += 1
         if state["since_save"] >= args.save_every:
             save(args.csv, fieldnames, rows)
@@ -331,16 +341,40 @@ def main():
     print(f"  ✓ {time.time() - t1:.1f}초 · {served_model} · {shown!r}", flush=True)
 
     # 2) 나머지는 동시에
+    # 모델별 '붐빔' 차단기: 한 모델이 503·429·504로 연달아 실패하면 이번 실행에서는 그 모델 행을 바로 건너뛴다.
+    # (붐비는 모델 행이 동시 요청 칸을 몇 분씩 붙잡아 다른 모델까지 멈추는 것을 막음. 건너뛴 행은 나중에 --retry-failed)
+    busy_streak, paused, inflight = Counter(), set(), Counter()
+    plock = threading.Lock()
+
     def work(i):
         if stop.is_set():
             return i, None, None, "skipped"
         model = models[i % len(models)]  # 행 번호로 번갈아 → 다시 실행해도 같은 행은 같은 모델
+        if model in paused:
+            return i, None, model, f"busy({model})"
+        with plock:
+            inflight[model] += 1
         try:
-            return (i, *call_with_retry(caller, model, rows[i]["prompt"], tag=rows[i]["task_id"]))
+            tries = 1 if busy_streak[model] else 3  # 이미 붐비는 중이면 재시도로 시간을 쓰지 않는다
+            res = call_with_retry(caller, model, rows[i]["prompt"], tries=tries, tag=rows[i]["task_id"])
         except Fatal as e:
             stop.set()
             state["fatal"] = str(e)
             return i, None, model, "fatal"
+        finally:
+            with plock:
+                inflight[model] -= 1
+        note = res[2]
+        with plock:
+            if note in BUSY_NOTES:
+                busy_streak[model] += 1
+                if busy_streak[model] >= args.busy_limit and model not in paused:
+                    paused.add(model)
+                    print(f"  ⏸ {model} 이(가) 계속 붐벼서(503·429·504) 이번 실행에서는 이 모델 행을 건너뜁니다."
+                          f" 다른 모델은 계속해요. 나중에 --retry-failed 로 채우세요.", flush=True)
+            elif res[0]:
+                busy_streak[model] = 0
+        return (i, *res)
 
     t0 = time.time()
     total = len(todo)
@@ -351,7 +385,10 @@ def main():
         while pending:
             finished, pending = wait(pending, timeout=15, return_when=FIRST_COMPLETED)
             if not finished:  # 15초 동안 하나도 안 끝남 → 살아 있다고 알림
-                print(f"  … 응답 기다리는 중 ({n:,}/{total:,} 완료, 경과 {time.time() - t0:.0f}초)", flush=True)
+                with plock:
+                    busy_now = ", ".join(f"{m} {c}" for m, c in inflight.items() if c)
+                print(f"  … 응답 기다리는 중 ({n:,}/{total:,} 완료, 경과 {time.time() - t0:.0f}초"
+                      + (f" · 진행 중: {busy_now}" if busy_now else "") + ")", flush=True)
                 continue
             for fut in finished:
                 i, text, model, note = fut.result()
@@ -359,6 +396,8 @@ def main():
                     continue
                 n += 1
                 record(i, text, model, note)
+                if note.startswith("busy("):
+                    state["streak"] = 0  # 멈춘 모델 건너뛰기는 '연속 오류'로 세지 않음
                 if n <= 3 or n % 10 == 0 or n == total:
                     rate = n / max(1e-9, time.time() - t0)
                     print(f"  {n:,}/{total:,} · {dict(stats)} · {rate * 60:.0f}건/분", flush=True)
@@ -375,6 +414,9 @@ def main():
         ex.shutdown(wait=True, cancel_futures=True)  # 아직 시작 안 한 요청은 버림
         save(args.csv, fieldnames, rows)
 
+    if paused:
+        skipped_busy = sum(1 for r in rows if (r.get("api_note") or "").startswith(("busy(", "error(5", "error(429")))
+        print(f"\n  ⏸ 붐벼서 건너뛴 모델: {sorted(paused)} · 건너뛴 행 {skipped_busy:,}건 → 나중에 같은 명령에 --retry-failed")
     left = sum(1 for r in rows if not (r.get("text") or "").strip())
     print(f"\n저장 → {args.csv} · 이번에 {dict(stats)} · 실제 답한 모델 {dict(served)} · 남은 빈 칸 {left:,}")
     if state["fatal"]:

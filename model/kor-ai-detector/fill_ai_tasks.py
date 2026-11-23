@@ -318,6 +318,11 @@ def main():
         sys.exit(f"  ✗ 첫 요청 실패: {e}\n{hint(provider)}")
     except KeyboardInterrupt:
         sys.exit("\n중단했어요.")
+    if note in ("error(503)", "error(429)", "error(500)", "error(502)", "error(504)"):
+        # 서버 혼잡·요청 한도: 네트워크 문제가 아니다. 아직 채운 게 없으니 모델 순서를 바꿔도 된다
+        sys.exit(f"  ✗ 첫 요청이 {note}로 실패해서 멈춥니다. {model0} 서버가 지금 붐비거나(503) 요청 한도에 걸렸어요(429).\n"
+                 f"  → 몇 분 뒤 같은 명령으로 다시 하거나, 다른 모델을 앞에 두고 시작하세요(예: --models {' '.join(models[1:] + models[:1])})."
+                 f"\n    중간에 붐비는 행은 건너뛰고 api_note에 남으니, 나중에 --retry-failed 로 채우면 됩니다.")
     if note.startswith("error"):  # 연결이 안 되면 나머지를 보내 봐야 똑같다 → 진단을 보여 주고 멈춤
         sys.exit(f"  ✗ 첫 요청이 {note}로 실패해서 멈춥니다. 위 '원인'을 보세요.\n{network_hint(caller)}")
     record(first, text, served_model, note)

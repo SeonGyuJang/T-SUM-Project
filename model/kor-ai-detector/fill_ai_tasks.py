@@ -1,0 +1,246 @@
+"""AI 리뷰 작업표(make_ai_tasks.py make)의 빈 text 칸을 API로 채웁니다. 손으로 붙여 넣는 대신.
+
+  pip install anthropic            # Claude      (키: ANTHROPIC_API_KEY)
+  pip install openai               # ChatGPT     (키: OPENAI_API_KEY)
+  pip install google-genai         # Gemini      (키: GEMINI_API_KEY)
+
+  python fill_ai_tasks.py data/ai_tasks/tasks_claude.csv  --dry-run          # 프롬프트 2개만 보기 (API 호출 없음)
+  python fill_ai_tasks.py data/ai_tasks/tasks_claude.csv  --limit 20         # 시험 20건
+  python fill_ai_tasks.py data/ai_tasks/tasks_claude.csv                     # 나머지 전부 (기본 claude-opus-5-5)
+  python fill_ai_tasks.py data/ai_tasks/tasks_chatgpt.csv --models <OpenAI 모델> [<모델2> …]
+  python fill_ai_tasks.py data/ai_tasks/tasks_gemini.csv  --models <Gemini 모델> [<모델2> …]
+  → 다 되면 python make_ai_tasks.py merge data/ai_tasks/tasks_*.csv
+
+- 어느 API를 쓸지는 작업표의 generator 칸(chatgpt·claude·gemini)으로 정합니다.
+- 행마다 새 대화로 하나씩 요청합니다(여러 개를 한 번에 받으면 비슷해짐). --models 를 여러 개 주면 행을 번갈아 나눠 맡깁니다
+  (가벼운 모델과 상위 모델을 섞으면 탐지 모델이 특정 모델 말투만 외우는 것을 줄입니다).
+- 실제로 답한 모델명을 model_version 칸에 적습니다. 거절·오류는 api_note 칸에 적고 다음 행으로 넘어갑니다.
+- 몇 건마다 작업표에 바로 저장합니다. 중간에 끊겨도(Ctrl+C 포함) 다시 실행하면 빈 칸만 이어서 채웁니다.
+  거절·오류로 넘어간 행까지 다시 시도하려면 --retry-failed.
+- 요청 한도(429)·서버 오류(5xx)는 기다렸다 다시 시도하고, 키·모델명 오류(401·403·404·400)는 바로 멈춥니다.
+"""
+import argparse
+import csv
+import os
+import sys
+import threading
+import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+PROVIDER_OF = {"chatgpt": "openai", "gpt": "openai", "openai": "openai", "claude": "anthropic", "gemini": "google"}
+DEFAULT_MODELS = {"anthropic": ["claude-opus-5-5"]}  # OpenAI·Gemini는 쓸 모델을 --models 로 직접 정합니다
+KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google": "GEMINI_API_KEY"}
+INSTALL = {"anthropic": "anthropic", "openai": "openai", "google": "google-genai"}
+# 서버 쪽 거절 시 다른 모델로 이어 주는 기능(fallbacks)을 받는 Claude 모델
+CLAUDE_FALLBACK_MODELS = {"claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
+FATAL_STATUS = {400, 401, 403, 404}
+
+
+class Fatal(Exception):
+    """키·모델명처럼 다시 해도 안 되는 오류 → 전체 중단."""
+
+
+def status_of(e):
+    for attr in ("status_code", "code", "status"):
+        v = getattr(e, attr, None)
+        if isinstance(v, int):
+            return v
+    resp = getattr(e, "response", None)
+    return getattr(resp, "status_code", None)
+
+
+class Caller:
+    """provider별 '프롬프트 1개 → (답, 실제 모델명, 메모)'. SDK는 처음 쓸 때 불러온다."""
+
+    def __init__(self, provider):
+        self.provider = provider
+        self.client = None
+        if provider == "fake":
+            return
+        try:
+            if provider == "anthropic":
+                import anthropic
+                self.client = anthropic.Anthropic(max_retries=5)
+            elif provider == "openai":
+                from openai import OpenAI
+                self.client = OpenAI(max_retries=5)
+            else:
+                from google import genai
+                self.client = genai.Client()
+        except ImportError:
+            sys.exit(f"pip install {INSTALL[provider]}  이 필요합니다.")
+        except Exception as e:  # 키가 없으면 클라이언트 생성에서 바로 실패하는 SDK가 있다
+            sys.exit(f"{provider} 클라이언트를 만들지 못했어요: {e}\n→ 환경 변수 {KEY_ENV[provider]} 에 API 키를 넣었는지 확인하세요.")
+
+    def __call__(self, model, prompt):
+        if self.provider == "fake":  # 테스트용
+            if "거절" in prompt:
+                return None, model, "refusal"
+            return f"[{model}] 생성 리뷰 {abs(hash(prompt)) % 1000}", model, ""
+        if self.provider == "anthropic":
+            return self._claude(model, prompt)
+        if self.provider == "openai":
+            r = self.client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}])
+            ch = r.choices[0]
+            if ch.finish_reason == "content_filter" or not (ch.message.content or "").strip():
+                return None, r.model, f"empty({ch.finish_reason})"
+            return ch.message.content.strip(), r.model, ""
+        r = self.client.models.generate_content(model=model, contents=prompt)
+        text = (getattr(r, "text", None) or "").strip()
+        served = getattr(r, "model_version", None) or model
+        if not text:
+            fb = getattr(r, "prompt_feedback", None)
+            return None, served, f"empty({getattr(fb, 'block_reason', None) or 'no text'})"
+        return text, served, ""
+
+    def _claude(self, model, prompt):
+        kwargs = {"model": model, "max_tokens": 16000, "output_config": {"effort": "low"},  # 짧은 리뷰라 low
+                  "messages": [{"role": "user", "content": prompt}]}
+        if model in CLAUDE_FALLBACK_MODELS:  # 안전 분류기가 거절하면 서버가 다른 모델로 이어서 답함
+            r = self.client.beta.messages.create(betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs)
+        else:
+            r = self.client.messages.create(**kwargs)
+        if r.stop_reason == "refusal":
+            cat = getattr(getattr(r, "stop_details", None), "category", None)
+            return None, r.model, f"refusal({cat})"
+        if r.stop_reason == "max_tokens":
+            return None, r.model, "max_tokens"
+        text = "".join(b.text for b in r.content if b.type == "text").strip()
+        return (text or None), r.model, "" if text else "empty"
+
+
+def call_with_retry(caller, model, prompt, tries=4):
+    """SDK 자체 재시도 뒤에도 429·5xx·연결 오류면 조금 더 기다렸다 다시. 401·403·404·400은 Fatal."""
+    for attempt in range(tries):
+        try:
+            return caller(model, prompt)
+        except Exception as e:
+            code = status_of(e)
+            if code in FATAL_STATUS:
+                raise Fatal(f"{type(e).__name__} ({code}): {str(e)[:300]}") from e
+            if attempt == tries - 1:
+                return None, model, f"error({code or type(e).__name__})"
+            time.sleep(min(60, 5 * 2 ** attempt))
+    return None, model, "error"
+
+
+def save(path, fieldnames, rows):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8-sig", newline="") as f:  # 엑셀에서 한글이 깨지지 않게 BOM
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("csv", help="make_ai_tasks.py가 만든 작업표 (tasks_<모델>.csv)")
+    ap.add_argument("--models", nargs="+", help="쓸 모델 ID (여러 개면 행을 번갈아). Claude 기본 claude-opus-5-5")
+    ap.add_argument("--provider", choices=["anthropic", "openai", "google", "fake"], help="보통 generator 칸으로 자동 결정")
+    ap.add_argument("--limit", type=int, default=0, help="이번에 채울 최대 행 수 (시험용)")
+    ap.add_argument("--concurrency", type=int, default=4, help="동시 요청 수 (요청 한도에 걸리면 줄이세요)")
+    ap.add_argument("--save-every", type=int, default=10)
+    ap.add_argument("--retry-failed", action="store_true", help="거절·오류로 넘어간 행(api_note 있음)도 다시 시도")
+    ap.add_argument("--max-errors", type=int, default=20, help="오류가 이만큼 연달아 나면 멈춤")
+    ap.add_argument("--dry-run", action="store_true", help="API 호출 없이 프롬프트 2개만 출력")
+    args = ap.parse_args()
+
+    with open(args.csv, encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        fieldnames = list(reader.fieldnames or [])
+    for extra in ("model_version", "api_note"):
+        if extra not in fieldnames:
+            fieldnames.append(extra)
+    if not rows:
+        sys.exit("작업표가 비어 있습니다.")
+    gens = {(r.get("generator") or "").strip().lower() for r in rows}
+    provider = args.provider or (PROVIDER_OF.get(gens.pop()) if len(gens) == 1 else None)
+    if not provider:
+        sys.exit(f"generator 칸으로 API를 정할 수 없어요({sorted(gens)}). --provider 를 주세요.")
+    models = args.models or DEFAULT_MODELS.get(provider) or (["fake-model"] if provider == "fake" else None)
+    if not models:
+        sys.exit(f"{provider}는 쓸 모델을 --models 로 지정하세요 (해당 서비스 문서의 모델 ID).")
+
+    todo = [i for i, r in enumerate(rows)
+            if not (r.get("text") or "").strip() and (args.retry_failed or not (r.get("api_note") or "").strip())]
+    if args.limit:
+        todo = todo[:args.limit]
+    done = sum(1 for r in rows if (r.get("text") or "").strip())
+    print(f"{args.csv}: 전체 {len(rows):,}행 · 채워짐 {done:,} · 이번에 채울 {len(todo):,} · {provider} {models}")
+    if args.dry_run:
+        for i in todo[:2]:
+            print(f"\n--- {rows[i]['task_id']} → {models[i % len(models)]}\n{rows[i]['prompt']}")
+        return
+    if not todo:
+        print("채울 행이 없습니다.")
+        return
+    if provider != "fake" and not os.environ.get(KEY_ENV[provider]) and provider != "anthropic":
+        sys.exit(f"환경 변수 {KEY_ENV[provider]} 에 API 키를 넣어 주세요 (export {KEY_ENV[provider]}=...).")
+
+    caller = Caller(provider)
+    lock = threading.Lock()
+    stats, served = Counter(), Counter()
+    state = {"since_save": 0, "streak": 0, "fatal": None}
+    stop = threading.Event()
+    t0 = time.time()
+
+    def work(i):
+        if stop.is_set():
+            return i, None, None, "skipped"
+        model = models[i % len(models)]  # 행 번호로 번갈아 → 다시 실행해도 같은 행은 같은 모델
+        try:
+            return (i, *call_with_retry(caller, model, rows[i]["prompt"]))
+        except Fatal as e:
+            stop.set()
+            state["fatal"] = str(e)
+            return i, None, model, "fatal"
+
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as ex:
+            futs = [ex.submit(work, i) for i in todo]
+            for n, fut in enumerate(as_completed(futs), 1):
+                i, text, model, note = fut.result()
+                with lock:
+                    if note in ("skipped", "fatal"):
+                        continue
+                    r = rows[i]
+                    if text:
+                        r["text"], r["model_version"], r["api_note"] = text, model, ""
+                        stats["ok"] += 1
+                        served[model] += 1
+                        state["streak"] = 0
+                    else:
+                        r["api_note"] = note
+                        stats[note.split("(")[0]] += 1
+                        state["streak"] = state["streak"] + 1 if note.startswith("error") else 0
+                    state["since_save"] += 1
+                    if state["since_save"] >= args.save_every:
+                        save(args.csv, fieldnames, rows)
+                        state["since_save"] = 0
+                    if n % 10 == 0 or n == len(todo):
+                        rate = n / max(1e-9, time.time() - t0)
+                        print(f"  {n:,}/{len(todo):,} · {dict(stats)} · {rate * 60:.0f}건/분", flush=True)
+                    if state["streak"] >= args.max_errors and not stop.is_set():
+                        print(f"  ⚠ 오류가 {state['streak']}번 연달아 나서 멈춥니다(네트워크·요청 한도 확인). 다시 실행하면 이어서 해요.")
+                        stop.set()
+    except KeyboardInterrupt:
+        stop.set()
+        print("\n중단했어요. 지금까지 채운 행은 저장합니다.")
+    finally:
+        save(args.csv, fieldnames, rows)
+
+    left = sum(1 for r in rows if not (r.get("text") or "").strip())
+    print(f"\n저장 → {args.csv} · 이번에 {dict(stats)} · 실제 답한 모델 {dict(served)} · 남은 빈 칸 {left:,}")
+    if state["fatal"]:
+        sys.exit(f"⚠ 멈춤: {state['fatal']}\n→ API 키({KEY_ENV.get(provider)})와 모델 ID를 확인하세요.")
+    if stats.get("refusal") or stats.get("empty"):
+        print("  거절·빈 답은 api_note에 적어 두었어요. 몇 건이면 그대로 두고, 많으면 해당 프롬프트를 확인하세요.")
+
+
+if __name__ == "__main__":
+    main()

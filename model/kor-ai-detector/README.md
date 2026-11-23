@@ -55,7 +55,8 @@ kor-ai-detector/
 ├── requirements.txt
 ├── download_lgc.py        LGC(XDAC_obs) 내려받기 + 필드·라벨 값 확인
 ├── convert_sources.py     AI Hub·네이버(·쿠팡) 사람 리뷰 → 공통 형식 파일 하나(data/raw/human_reviews.jsonl)
-├── make_ai_tasks.py       AI 리뷰 수작업 수집용 작업표 만들기 / 채운 작업표 합치기(data/raw/ai_*.jsonl)
+├── make_ai_tasks.py       AI 리뷰 작업표 만들기 / 채운 작업표 합치기(data/raw/ai_*.jsonl)
+├── fill_ai_tasks.py       작업표의 빈 칸을 ChatGPT·Claude·Gemini API로 채우기
 ├── prepare_data.py        데이터 통합·정제·균형 맞추기·분할 (1단계/2단계 데이터 생성)
 ├── train.py               파인튜닝 (1단계·2단계 공용)
 ├── evaluate.py            임계값(T_AI·T_HUMAN) 결정 + 테스트셋 평가 리포트

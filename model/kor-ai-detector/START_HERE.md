@@ -42,7 +42,7 @@ python convert_sources.py                             # AI Hub + 네이버 → d
 > LGC는 라이선스가 명시돼 있지 않습니다. 발표·연구용으로 쓰고, 상업적으로 쓰기 전에는 저자에게 확인하세요.
 > 전체 LGC(사람 댓글 포함)가 꼭 필요하면 저자(모델 카드의 Contact)에게 문의할 수 있습니다. 받게 되면 1단계를 다시 켤 수 있게 코드는 남겨 두었습니다(README 5.1).
 
-## [D] AI 리뷰 수집 — **팀이 할 일, 지금 가장 중요** (이게 있어야 학습 가능)
+## [D] AI 리뷰 만들기 — **지금 할 일** (이게 있어야 학습 가능)
 
 ```bash
 python convert_sources.py                                          # 사람 리뷰 합본 최신화 (make 전에 한 번)
@@ -58,21 +58,39 @@ python make_ai_tasks.py make --n 1000 --generators chatgpt claude gemini
   python make_ai_tasks.py make --batch b2 --n 500 --generators chatgpt claude gemini
   # → tasks_chatgpt_b2.csv …   (답을 채운 작업표는 실수로 덮어쓰지 않도록 막혀 있음)
   ```
+### 작업표 채우기 — API로 (권장)
+서비스마다 API 키를 환경 변수에 넣고, 필요한 패키지만 설치합니다.
+```bash
+pip install anthropic openai google-genai      # 쓰는 것만
+export ANTHROPIC_API_KEY=...   OPENAI_API_KEY=...   GEMINI_API_KEY=...
+```
+```bash
+python fill_ai_tasks.py data/ai_tasks/tasks_claude.csv --dry-run     # 프롬프트 2개만 보기 (돈 안 듦)
+python fill_ai_tasks.py data/ai_tasks/tasks_claude.csv --limit 20    # 시험 20건 → CSV 열어서 결과 확인
+python fill_ai_tasks.py data/ai_tasks/tasks_claude.csv               # 나머지 전부 (기본 claude-opus-5-5)
+python fill_ai_tasks.py data/ai_tasks/tasks_chatgpt.csv --models <OpenAI 모델 ID> [<모델2>]
+python fill_ai_tasks.py data/ai_tasks/tasks_gemini.csv  --models <Gemini 모델 ID> [<모델2>]
+```
+- **행마다 새 대화로 하나씩** 요청하고, 실제로 답한 모델명을 `model_version`에 적습니다.
+- `--models`를 여러 개 주면 행을 번갈아 맡깁니다. **가벼운 모델과 상위 모델을 섞으세요**(예: Claude는 `--models claude-opus-5-5 claude-haiku-5-5`). 한 모델 말투만 외우는 걸 막습니다.
+- 몇 건마다 바로 저장하니 끊겨도 같은 명령을 다시 실행하면 빈 칸만 이어서 채웁니다. 거절·오류는 `api_note` 칸에 남고 건너뜁니다(`--retry-failed`로 다시).
+- 요청 한도(429)에 자주 걸리면 `--concurrency 2`로 줄이세요. 키·모델명이 틀리면 바로 멈추고 알려 줍니다.
+
+### 작업표 채우기 — 손으로 (API가 없을 때)
 1. CSV를 엑셀·구글 시트로 엽니다. 행마다 `prompt` 칸을 해당 서비스(ChatGPT·Claude·Gemini)의 **새 대화**에 붙여 넣습니다.
-2. 답을 그대로 `text` 칸에, 실제로 쓴 모델명(예: `gpt-4o`, `claude-sonnet-5-5`, `gemini-2.5-flash`)을 `model_version` 칸에 적습니다.
+2. 답을 그대로 `text` 칸에, 실제로 쓴 모델명을 `model_version` 칸에 적습니다. ChatGPT의 '메모리' 기능은 꺼 두세요.
    - "물론입니다! 다음은 리뷰입니다:" 같은 안내 문구는 지우지 않아도 됩니다(자동 정리). 그 밖의 내용은 손대지 마세요.
-   - **한 대화에 하나씩.** 한 번에 여러 개를 받으면 비슷한 글이 나옵니다. ChatGPT의 '메모리' 기능은 꺼 두세요.
-   - 가벼운 모델과 상위 모델을 섞어 쓰면 좋습니다(같은 서비스 안에서 모델 바꾸기).
-3. 다 채운 만큼 합칩니다(중간에 몇 번이고 다시 실행해도 됩니다):
-   ```bash
-   python make_ai_tasks.py merge data/ai_tasks/tasks_*.csv     # → data/raw/ai_chatgpt.jsonl …
-   ```
+
+### 합치기
+채운 만큼 합칩니다(중간에 몇 번이고 다시 실행해도 됩니다):
+```bash
+python make_ai_tasks.py merge data/ai_tasks/tasks_*.csv     # → data/raw/ai_chatgpt.jsonl …
+```
 
 **얼마나?**
 - **파일럿: 생성 모델마다 100~200건.** 이만큼 모이면 바로 [E]~[G]를 한 번 돌려 지름길 점검과 파이프라인을 확인하세요(학습 몇 분).
 - **첫 버전: 생성 모델마다 1,000건(총 3,000건).** 사람 리뷰는 [E]에서 AI 수에 맞춰 자동으로 뽑습니다.
-- 수작업이면 1건에 30초~1분 → 3,000건은 25~50시간입니다. 팀원이 나눠 하거나, API를 쓸 수 있으면 훨씬 빠릅니다
-  (Claude는 `model/` 패키지의 `python -m realstar_model generate`로 자동 생성 가능).
+- API면 동시 4건 기준 몇십 분~1시간 정도, 수작업이면 1건에 30초~1분(3,000건에 25~50시간)입니다.
 
 ## [E] 데이터 만들기
 

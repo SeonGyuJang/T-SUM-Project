@@ -6,3 +6,7 @@ numpy
 # XDAC 기준선(xdac_baseline.py)을 돌릴 때만 필요
 huggingface_hub
 captum
+# AI 리뷰를 API로 채울 때(fill_ai_tasks.py) 쓰는 서비스 것만
+# anthropic        # Claude
+# openai           # ChatGPT
+# google-genai     # Gemini

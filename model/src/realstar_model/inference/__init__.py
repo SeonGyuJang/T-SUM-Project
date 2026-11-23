@@ -1,4 +1,4 @@
-"""추론 API — service ↔ model 계약 (MODEL_DEV.md 4.12.2).
+"""추론 API — service ↔ model 계약.
 
   from realstar_model.inference import Detector, ReviewInput
   det = Detector.load("artifacts/det-ko-review-v0.1")
@@ -56,12 +56,7 @@ class Detector:
         p = Path(path)
         manifest = json.loads((p / "manifest.json").read_text(encoding="utf-8"))
         kind = manifest.get("model_type")
-        if kind == "tfidf_lr":
-            import joblib
-
-            pipe = joblib.load(p / "tfidf_lr.joblib")
-            scorer = pipe.decision_function
-        elif kind == "encoder":
+        if kind == "encoder":
             from realstar_model.models.encoder import EncoderScorer
 
             scorer = EncoderScorer(p / "encoder", max_length=int(manifest.get("max_length", 256)))

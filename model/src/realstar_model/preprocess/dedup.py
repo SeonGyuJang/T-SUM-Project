@@ -1,4 +1,4 @@
-"""근접 중복 묶기 (MODEL_DEV.md 4.4-7). 삭제하지 않고 그룹 ID만 돌려준다. service가 상품 안 리뷰에 쓴다."""
+"""근접 중복 묶기. 삭제하지 않고 그룹 ID만 돌려준다. service가 상품 안 리뷰에 쓴다."""
 
 from __future__ import annotations
 

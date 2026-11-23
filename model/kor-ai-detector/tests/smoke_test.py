@@ -219,12 +219,9 @@ def test_convert_and_tasks():
             for i in range(50):
                 f.write(json.dumps({"review_id": f"nv-{i:04d}", "star": [1, 2, 4, 5][i % 4], "content": f"리뷰 내용 {i} 배송 좋아요"},
                                    ensure_ascii=False) + "\n")
-        cp = os.path.join(d, "coupang.json")
-        json.dump({"products": {"777": {"name": "가짜 텀블러", "category": "주방", "reviews": [
-            {"review_id": "cp-777-1", "star": 3, "content": "본 리뷰는 쿠팡캐시를 지급받기 위해 작성한 것입니다. 보온 잘 돼요",
-             "created_at": "2021-03-01", "period": "pre_chatgpt", "product_name": "가짜 텀블러"},
-            {"review_id": "cp-777-2", "star": 5, "content": "최근 리뷰", "created_at": "2025-01-01", "period": "post_chatgpt"}]}}},
-            open(cp, "w", encoding="utf-8"), ensure_ascii=False)
+        nv_txt = os.path.join(d, "naver_shopping.txt")  # bab2min 원본 형식: 별점<TAB>리뷰
+        with open(nv_txt, "w", encoding="utf-8") as f:
+            f.write("5\t배송 빠르고 좋아요\n1\t최악이에요\n")
         # AI Hub 속성기반 감정분석 흉내: 구분 폴더 안 JSON 배열
         ah = os.path.join(d, "AI_hub", "pre", "TL_쇼핑몰_01.패션_1-1.여성의류")
         os.makedirs(ah)
@@ -238,13 +235,14 @@ def test_convert_and_tasks():
         json.dump(recs, open(os.path.join(ah, "a.json"), "w", encoding="utf-8"), ensure_ascii=False)
         raw = os.path.join(d, "raw")
         merged = os.path.join(raw, "human_reviews.jsonl")
-        out = run("convert_sources.py", "--aihub", os.path.join(d, "AI_hub", "pre"), "--naver", nv, "--coupang", cp, "--out", merged)
+        out = run("convert_sources.py", "--aihub", os.path.join(d, "AI_hub", "pre"), "--naver", nv, "--out", merged)
+        run("convert_sources.py", "--aihub", os.path.join(d, "none"), "--naver", nv_txt, "--out", os.path.join(raw, "txt.jsonl"))
+        txt_rows = load(os.path.join(raw, "txt.jsonl"))
+        assert [(r["rating"], r["text"]) for r in txt_rows] == [(5, "배송 빠르고 좋아요"), (1, "최악이에요")], txt_rows
         rows_all = load(merged)
         n = [r for r in rows_all if r["platform"] == "naver"]
-        c = [r for r in rows_all if r["platform"] == "coupang"]
         a = [r for r in rows_all if r["platform"] == "aihub"]
         assert len(n) == 50 and n[0]["product_id"] == "nv-0000" and n[0]["date"] == "2020-07-31"
-        assert len(c) == 1 and c[0]["text"] == "보온 잘 돼요" and c[0]["product_id"] == "cp-777"
         assert len(a) == 9, a                                   # 2022-12-15·날짜 없음·SNS는 제외
         assert "SNS: 1건 [제외" in out and "날짜 없음 1건" in out, out
         assert {r["rating"] for r in a} == {1, 5, 4} and a[0]["date"] == "2021-10-10"
@@ -278,7 +276,33 @@ def test_convert_and_tasks():
         assert len(b2) == 5 and b2[0]["task_id"].startswith("claude-b2-")
         assert not {x["anchor_id"] for x in b2} & {x["anchor_id"] for x in rows}
         assert len(load(os.path.join(raw, "ai_claude.jsonl"))) == 8  # 원래 작업표는 그대로
-    print("✓ convert_sources(AI Hub·네이버·쿠팡 → 파일 하나) + make_ai_tasks(작업표 만들기·합치기·추가 묶음)")
+    print("✓ convert_sources(AI Hub·네이버 → 파일 하나) + make_ai_tasks(작업표 만들기·합치기·추가 묶음)")
+
+
+def test_fill_ai_tasks():
+    """API 대신 가짜 응답기로: 빈 칸 채우기·모델 번갈아·거절 기록·이어서 하기·merge 호환."""
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "tasks_claude.csv")
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["task_id", "generator", "product_id", "prompt", "text", "model_version"])
+            for i in range(9):
+                w.writerow([f"claude-{i:05d}", "claude", f"p{i}", "이건 거절해 줘" if i == 4 else f"리뷰 써 줘 {i}",
+                            "이미 채움" if i == 0 else "", "m0" if i == 0 else ""])
+        out = run("fill_ai_tasks.py", path, "--provider", "fake", "--models", "a", "b", "--limit", "5", "--save-every", "2")
+        rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
+        assert rows[0]["text"] == "이미 채움" and rows[0]["model_version"] == "m0"   # 채운 칸은 건드리지 않음
+        filled = [r for r in rows[1:6] if r["text"]]
+        assert len(filled) == 4 and rows[4]["api_note"].startswith("refusal"), rows   # 4번은 거절로 기록
+        assert {r["model_version"] for r in filled} == {"a", "b"}                     # 모델 번갈아
+        assert all(not r["text"] for r in rows[6:])                                   # --limit 5
+        run("fill_ai_tasks.py", path, "--provider", "fake", "--models", "a", "b")     # 이어서: 나머지만
+        rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
+        assert sum(1 for r in rows if r["text"]) == 8 and not rows[4]["text"], "남은 빈 칸 = 거절 1건"
+        run("make_ai_tasks.py", "merge", path, "--out", d)
+        assert len(load(os.path.join(d, "ai_claude.jsonl"))) == 8
+        assert "실제 답한 모델" in out
+    print("✓ fill_ai_tasks(빈 칸만 채우기·모델 번갈아·거절 기록·이어서 하기)")
 
 
 def test_anchor_mix_and_matching():
@@ -326,7 +350,7 @@ def test_anchor_mix_and_matching():
 
 def test_compile():
     for f in ("train.py", "evaluate.py", "xdac_baseline.py", "prepare_data.py", "metrics.py", "predictor.py", "app.py",
-              "convert_sources.py", "make_ai_tasks.py", "export_for_service.py", "download_lgc.py"):
+              "convert_sources.py", "make_ai_tasks.py", "fill_ai_tasks.py", "export_for_service.py", "download_lgc.py"):
         py_compile.compile(os.path.join(ROOT, f), doraise=True)
     print("✓ 문법 검사 (train.py 등)")
 
@@ -340,5 +364,6 @@ if __name__ == "__main__":
     test_newlines_auto()
     test_convert_and_tasks()
     test_anchor_mix_and_matching()
+    test_fill_ai_tasks()
     test_prepare_and_evaluate()
     print("\n모든 점검 통과")

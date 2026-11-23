@@ -1,4 +1,4 @@
-"""전처리 (MODEL_DEV.md 4.4) — 학습과 추론 공용. service도 이 함수를 그대로 import한다(D-009).
+"""전처리 — 서비스 추론용. service도 이 함수를 그대로 import한다(D-009).
 
   from realstar_model.preprocess import clean_review
   res = clean_review(title="좋아요", content="본 리뷰는 쿠팡캐시를 지급받기 위해 작성한 것입니다. 배송 빨라요 ㅋㅋ")

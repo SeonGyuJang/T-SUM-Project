@@ -1,11 +1,10 @@
 """모은 사람 리뷰들을 README 4.3 공통 형식으로 바꿔 **파일 하나**(data/raw/human_reviews.jsonl)로 합칩니다.
 
   AI Hub 속성기반 감정분석  model/data/raw/AI_hub/pre/<구분 폴더>/*.json   (직접 압축을 풀어 넣은 것, 약 25만 건)
-  네이버 쇼핑              model/data/raw/naver/naver_shopping.jsonl      (python collect_training_data.py naver, 20만 건)
-  쿠팡 (있으면)            model/data/raw/coupang/coupang_training.json
+  네이버 쇼핑              model/data/raw/naver/naver_shopping.jsonl  또는 원본 naver_shopping.txt (20만 건)
+                           원본: https://github.com/bab2min/corpus/tree/master/sentiment  ("별점<TAB>리뷰" 한 줄에 하나)
 
   python convert_sources.py              # → data/raw/human_reviews.jsonl  (+ 출처·카테고리·별점·날짜 요약 출력)
-  python convert_sources.py --no-coupang # 쿠팡 수집분은 빼기
 
 JSONL = 한 줄에 리뷰 하나인 JSON. 45만 건을 JSON 배열 하나로 두면 매번 통째로 읽어야 해서 느려 이 형식을 씁니다.
 공통 형식 필드: text, product_id, platform, date, rating(1~5), category, product_name, source_id
@@ -16,7 +15,6 @@ JSONL = 한 줄에 리뷰 하나인 JSON. 45만 건을 JSON 배열 하나로 두
   Source가 SNS인 글은 쇼핑몰 리뷰와 문체가 달라 기본으로 뺍니다(--aihub-sources 쇼핑몰,SNS 또는 all로 포함).
 - 네이버 말뭉치에는 상품 정보가 없어 리뷰마다 product_id = "nv-<리뷰ID>"(리뷰 1건 = 그룹 1개)로 둡니다.
   날짜도 없어서 수집 시점(2020년 6~7월)의 상한인 2020-07-31을 넣습니다(--human-before 필터 통과용, date_estimated=true).
-- 쿠팡은 2022-11-30 이전(period=pre_chatgpt) 리뷰만 내보냅니다. '쿠팡캐시 리뷰 이벤트' 고지 문구는 본문에서 뗍니다(README 4.4-4).
 """
 import argparse
 import glob
@@ -29,7 +27,6 @@ from collections import Counter
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 MODEL_DATA = os.path.join(os.path.dirname(ROOT), "data", "raw")
-CASH_EVENT = re.compile(r"본\s*(?:리뷰|후기)[^.\n]{0,80}?쿠팡\s*캐시[^.\n]{0,80}?(?:작성|참여)[^.\n]{0,30}?(?:것입니다|합니다|했습니다)\.?\s*")
 
 
 def write(path, rows):
@@ -126,32 +123,24 @@ def aihub(src_dir, cutoff, stats, sources=("쇼핑몰",), keep_undated=False):
 
 
 def naver(src):
+    """정리된 naver_shopping.jsonl({review_id, star, content}) 또는 원본 naver_shopping.txt("별점\t리뷰")."""
     rows = []
-    with open(src, encoding="utf-8") as f:
-        for line in f:
-            r = json.loads(line)
-            rid = str(r["review_id"])
-            rows.append({"text": r["content"], "product_id": rid if rid.startswith("nv-") else f"nv-{rid}", "platform": "naver",
-                         "date": "2020-07-31", "date_estimated": True, "rating": r.get("star"), "source_id": r["review_id"]})
-    return rows
-
-
-def coupang(src):
-    d = json.load(open(src, encoding="utf-8"))
-    rows, dropped = [], 0
-    for pid, prod in d.get("products", {}).items():
-        for r in prod.get("reviews", []):
-            if r.get("period") != "pre_chatgpt":
-                dropped += 1
+    with open(src, encoding="utf-8-sig") as f:
+        for i, line in enumerate(f):
+            line = line.rstrip("\n")
+            if not line.strip():
                 continue
-            text = CASH_EVENT.sub("", r.get("content") or "").strip()
+            if src.endswith(".txt"):
+                star, _, text = line.partition("\t")
+                rid, text = f"nv-{i:06d}", text.strip()
+                star = int(star) if star.strip().isdigit() else None
+            else:
+                r = json.loads(line)
+                rid, star, text = str(r["review_id"]), r.get("star"), r["content"]
             if not text:
                 continue
-            rows.append({"text": text, "product_id": f"cp-{pid}", "platform": "coupang", "date": r.get("created_at"),
-                         "rating": r.get("star"), "category": r.get("category") or prod.get("category"),
-                         "product_name": r.get("product_name") or prod.get("name"), "source_id": r["review_id"]})
-    if dropped:
-        print(f"  (쿠팡 2022-11-30 이후 리뷰 {dropped:,}건은 사람 라벨로 쓰지 않아 제외)")
+            rows.append({"text": text, "product_id": rid if rid.startswith("nv-") else f"nv-{rid}", "platform": "naver",
+                         "date": "2020-07-31", "date_estimated": True, "rating": star, "source_id": rid})
     return rows
 
 
@@ -173,9 +162,10 @@ def summarize(rows):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--aihub", default=os.path.join(MODEL_DATA, "AI_hub", "pre"), help="AI Hub 압축 푼 폴더")
-    ap.add_argument("--naver", default=os.path.join(MODEL_DATA, "naver", "naver_shopping.jsonl"))
-    ap.add_argument("--coupang", default=os.path.join(MODEL_DATA, "coupang", "coupang_training.json"))
-    ap.add_argument("--no-coupang", action="store_true", help="쿠팡 수집분은 넣지 않음")
+    nv_default = os.path.join(MODEL_DATA, "naver", "naver_shopping.jsonl")
+    if not os.path.exists(nv_default) and os.path.exists(nv_default.replace(".jsonl", ".txt")):
+        nv_default = nv_default.replace(".jsonl", ".txt")
+    ap.add_argument("--naver", default=nv_default, help="naver_shopping.jsonl 또는 원본 naver_shopping.txt")
     ap.add_argument("--aihub-sources", default="쇼핑몰",
                     help="AI Hub에서 쓸 Source(쉼표로 여러 개, all=전부). 기본은 쇼핑몰 리뷰만 — SNS 글은 리뷰와 문체가 달라 뺌")
     ap.add_argument("--keep-undated", action="store_true", help="날짜(RDate)가 없는 AI Hub 글도 사람 리뷰로 넣음")
@@ -195,11 +185,7 @@ def main():
         print(f"  · 네이버: {len(nv):,}건")
         rows += nv
     else:
-        print(f"  ⚠ 네이버 파일 없음: {args.naver}  (저장소 루트에서 python collect_training_data.py naver)")
-    if not args.no_coupang and os.path.exists(args.coupang):
-        cp = coupang(args.coupang)
-        print(f"  · 쿠팡: {len(cp):,}건")
-        rows += cp
+        print(f"  ⚠ 네이버 파일 없음: {args.naver}  (원본 naver_shopping.txt를 model/data/raw/naver/ 에 받아 두세요)")
     if not rows:
         raise SystemExit("사람 리뷰를 하나도 찾지 못했습니다. 위 경로를 확인하세요.")
     write(args.out, rows)

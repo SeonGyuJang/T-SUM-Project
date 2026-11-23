@@ -4,23 +4,23 @@
 # 수집용 Chrome 프로필: 쿠키·로그인 세션·방문 기록·캐시가 들어 있다 (coupang_reviews.py PROFILE_DIR)
 .browser_profile/
 **/.browser_profile/
-# 병렬 수집 작업자별 프로필 사본 (collect_training_data.py --workers)
+# 예전 학습용 수집기가 만든 프로필 사본
 .browser_profile*/
 # 서비스용 수집기 결과: output/products/*.json, all_products.json, failed.txt, raw/debug/ (crawler_last.log, search_last.html 포함)
 output/
 # 이전 수집 시험(spike) 결과 HTML·리포트
 var/
-# 학습용 데이터 수집기 결과·상태·디버그 화면 (collect_training_data.py → model/data/raw/, model/data/debug/)
+# 모델 원천 데이터(AI Hub·네이버·XDAC)와 내보낸 모델
 model/data/
 model/artifacts/
-# kor-ai-detector 학습 파이프라인 산출물 (리뷰 원문·대용량 가중치·내려받은 XDAC)
+# kor-ai-detector 학습 파이프라인 산출물 (리뷰 원문·AI 작업표·대용량 가중치·내려받은 XDAC)
 model/kor-ai-detector/data/
 model/kor-ai-detector/models/
 model/kor-ai-detector/reports/
 model/kor-ai-detector/XDAC_obs/
 # 혹시 다른 위치에 생긴 수집 결과
-coupang_training.json
 *.json.tmp
+*.csv.tmp
 *.jsonl
 all_products.json
 failed.txt

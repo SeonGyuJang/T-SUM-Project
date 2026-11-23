@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11", cache: pip, cache-dependency-path: model/pyproject.toml }
-      - run: pip install -e ".[gen,dev]"
+      - run: pip install -e ".[dev]"
       - run: ruff check src tests
       - run: mypy src
       - run: pytest -q

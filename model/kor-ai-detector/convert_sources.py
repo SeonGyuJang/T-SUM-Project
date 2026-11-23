@@ -12,7 +12,8 @@ JSONL = 한 줄에 리뷰 하나인 JSON. 45만 건을 JSON 배열 하나로 두
 - AI Hub: ReviewScore(0~100)를 1~5점으로(20점 단위, 반올림), RDate → date, 카테고리 = "Domain > MainCategory",
   product_id = 같은 카테고리·상품명이면 같은 값(같은 상품 리뷰가 학습과 테스트에 갈라지지 않게).
   상품명의 비식별 표시(OO, 스** 같은 가림)는 product_name에서 지웁니다(AI 생성 프롬프트에 그대로 들어가지 않게). 본문은 그대로 둡니다.
-  2022-12-01 이후 날짜 리뷰는 사람 라벨로 쓰지 않아 뺍니다(--cutoff).
+  2022-12-01 이후·날짜 없는 글은 사람 라벨로 쓰지 않아 뺍니다(--cutoff, --keep-undated).
+  Source가 SNS인 글은 쇼핑몰 리뷰와 문체가 달라 기본으로 뺍니다(--aihub-sources 쇼핑몰,SNS 또는 all로 포함).
 - 네이버 말뭉치에는 상품 정보가 없어 리뷰마다 product_id = "nv-<리뷰ID>"(리뷰 1건 = 그룹 1개)로 둡니다.
   날짜도 없어서 수집 시점(2020년 6~7월)의 상한인 2020-07-31을 넣습니다(--human-before 필터 통과용, date_estimated=true).
 - 쿠팡은 2022-11-30 이전(period=pre_chatgpt) 리뷰만 내보냅니다. '쿠팡캐시 리뷰 이벤트' 고지 문구는 본문에서 뗍니다(README 4.4-4).
@@ -60,12 +61,13 @@ def aihub_rating(score):
     return max(1, min(5, int(v / 20 + 0.5))) if v > 5 else max(1, min(5, int(round(v))))
 
 
-def aihub(src_dir, cutoff, stats):
+def aihub(src_dir, cutoff, stats, sources=("쇼핑몰",), keep_undated=False):
     files = sorted(glob.glob(os.path.join(src_dir, "**", "*.json"), recursive=True))
     if not files:
         print(f"  ⚠ AI Hub JSON 파일이 없습니다: {src_dir}")
         return []
     rows = []
+    per_src = {}  # 출처(Source)별 진단: 건수, 별점·날짜 없음, 길이, 예시
     for path in files:
         rel = nfc(os.path.relpath(path, src_dir))  # macOS 한글 파일명은 NFD라 NFC로
         try:
@@ -85,6 +87,18 @@ def aihub(src_dir, cutoff, stats):
                 continue
             d = re.sub(r"\D", "", str(r.get("RDate") or ""))
             date = f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) >= 8 else None
+            src = nfc(r.get("Source")) or "?"
+            ps = per_src.setdefault(src, {"n": 0, "no_rating": 0, "no_date": 0, "lens": [], "example": text[:80]})
+            ps["n"] += 1
+            ps["no_rating"] += aihub_rating(r.get("ReviewScore")) is None
+            ps["no_date"] += date is None
+            ps["lens"].append(len(text))
+            if sources and src not in sources:
+                stats[f"aihub_skip_source_{src}"] += 1
+                continue
+            if date is None and not keep_undated:
+                stats["aihub_undated"] += 1
+                continue
             if date and cutoff and date >= cutoff:
                 stats["aihub_after_cutoff"] += 1
                 continue
@@ -96,8 +110,18 @@ def aihub(src_dir, cutoff, stats):
                          "product_name": clean_product_name(product) or None, "source": nfc(r.get("Source")) or None,
                          "source_id": f"ah-{fid}-{r.get('Index', i)}", "file": rel})
             stats["aihub_ok"] += 1
-    print(f"  · AI Hub: 파일 {len(files):,}개 → 리뷰 {len(rows):,}건"
-          + (f" (기준일 {cutoff} 이후 {stats['aihub_after_cutoff']:,}건 제외)" if stats["aihub_after_cutoff"] else ""))
+    print("  · AI Hub 출처(Source)별:")
+    for src, ps in sorted(per_src.items(), key=lambda kv: -kv[1]["n"]):
+        lens = sorted(ps["lens"])
+        used = "사용" if not sources or src in sources else "제외(--aihub-sources)"
+        print(f"      {src}: {ps['n']:,}건 [{used}] · 별점 없음 {ps['no_rating']:,} · 날짜 없음 {ps['no_date']:,}"
+              f" · 길이 중앙값 {lens[len(lens) // 2]}자 · 예: {ps['example']!r}")
+    dropped = []
+    if stats["aihub_undated"]:
+        dropped.append(f"날짜 없음 {stats['aihub_undated']:,}건(ChatGPT 이전인지 알 수 없음, --keep-undated로 포함)")
+    if stats["aihub_after_cutoff"]:
+        dropped.append(f"기준일 {cutoff} 이후 {stats['aihub_after_cutoff']:,}건")
+    print(f"  · AI Hub: 파일 {len(files):,}개 → 리뷰 {len(rows):,}건" + (f" (제외: {', '.join(dropped)})" if dropped else ""))
     return rows
 
 
@@ -142,8 +166,8 @@ def summarize(rows):
     if years:
         print(f"  연도(추정 날짜 제외): {dict(sorted(years.items()))}")
     srcs = Counter(r.get("source") for r in rows if r.get("source"))
-    if len(srcs) > 1:
-        print(f"  AI Hub Source: {dict(srcs)}  ← 리뷰가 아닌 출처가 섞였다면 알려 주세요")
+    if srcs:
+        print(f"  AI Hub Source: {dict(srcs)}")
 
 
 def main():
@@ -152,13 +176,18 @@ def main():
     ap.add_argument("--naver", default=os.path.join(MODEL_DATA, "naver", "naver_shopping.jsonl"))
     ap.add_argument("--coupang", default=os.path.join(MODEL_DATA, "coupang", "coupang_training.json"))
     ap.add_argument("--no-coupang", action="store_true", help="쿠팡 수집분은 넣지 않음")
+    ap.add_argument("--aihub-sources", default="쇼핑몰",
+                    help="AI Hub에서 쓸 Source(쉼표로 여러 개, all=전부). 기본은 쇼핑몰 리뷰만 — SNS 글은 리뷰와 문체가 달라 뺌")
+    ap.add_argument("--keep-undated", action="store_true", help="날짜(RDate)가 없는 AI Hub 글도 사람 리뷰로 넣음")
     ap.add_argument("--cutoff", default="2022-12-01", help="이 날짜 이후 리뷰는 사람 라벨로 쓰지 않음 (ChatGPT 공개 2022-11-30)")
     ap.add_argument("--out", default=os.path.join(ROOT, "data", "raw", "human_reviews.jsonl"))
     args = ap.parse_args()
     stats = Counter()
     rows = []
     if os.path.isdir(args.aihub):
-        rows += aihub(args.aihub, args.cutoff, stats)
+        srcs = () if args.aihub_sources.strip().lower() == "all" else tuple(
+            nfc(x) for x in args.aihub_sources.split(",") if x.strip())
+        rows += aihub(args.aihub, args.cutoff, stats, srcs, args.keep_undated)
     else:
         print(f"  · AI Hub 폴더 없음: {args.aihub}")
     if os.path.exists(args.naver):

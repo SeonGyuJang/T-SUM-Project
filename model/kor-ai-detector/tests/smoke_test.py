@@ -231,6 +231,10 @@ def test_convert_and_tasks():
         recs = [{"Index": str(i), "RawText": f"사이즈가 작아요 {i}", "Source": "쇼핑몰", "Domain": "패션", "MainCategory": "여성의류",
                  "ProductName": "OO 스** 티셔츠 4종세트" if i < 6 else "OO 니트 라** 세트", "ReviewScore": ["20", "100", "70", "90"][i % 4],
                  "RDate": "20221215" if i == 9 else "20211010", "GeneralPolarity": "-1", "Aspects": []} for i in range(10)]
+        recs += [{"Index": "s1", "RawText": "#데일리룩 오늘의 코디 공유해요", "Source": "SNS", "Domain": "패션",
+                  "MainCategory": "여성의류", "ProductName": "", "Aspects": []},
+                 {"Index": "nd", "RawText": "날짜 없는 쇼핑몰 리뷰", "Source": "쇼핑몰", "Domain": "패션",
+                  "MainCategory": "여성의류", "ProductName": "OO 니트", "ReviewScore": "100", "Aspects": []}]
         json.dump(recs, open(os.path.join(ah, "a.json"), "w", encoding="utf-8"), ensure_ascii=False)
         raw = os.path.join(d, "raw")
         merged = os.path.join(raw, "human_reviews.jsonl")
@@ -241,7 +245,8 @@ def test_convert_and_tasks():
         a = [r for r in rows_all if r["platform"] == "aihub"]
         assert len(n) == 50 and n[0]["product_id"] == "nv-0000" and n[0]["date"] == "2020-07-31"
         assert len(c) == 1 and c[0]["text"] == "보온 잘 돼요" and c[0]["product_id"] == "cp-777"
-        assert len(a) == 9, a                                   # 2022-12-15 리뷰는 제외
+        assert len(a) == 9, a                                   # 2022-12-15·날짜 없음·SNS는 제외
+        assert "SNS: 1건 [제외" in out and "날짜 없음 1건" in out, out
         assert {r["rating"] for r in a} == {1, 5, 4} and a[0]["date"] == "2021-10-10"
         assert a[0]["category"] == "패션 > 여성의류" and a[0]["product_name"] == "티셔츠 4종세트"
         assert len({r["product_id"] for r in a}) == 2           # 상품명별로 묶임

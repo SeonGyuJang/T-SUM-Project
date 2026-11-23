@@ -111,9 +111,22 @@ class Caller:
         return (text or None), r.model, "" if text else "empty"
 
 
+def root_cause(e):
+    """SDK의 'Connection error.' 뒤에 숨은 실제 원인(SSL 인증서·DNS·프록시 등)."""
+    seen = set()
+    while (e.__cause__ or e.__context__) is not None and id(e) not in seen:
+        seen.add(id(e))
+        e = e.__cause__ or e.__context__
+    return e
+
+
 def describe(e):
     code = status_of(e)
-    return f"{type(e).__name__}{f' ({code})' if code else ''}: {str(e)[:300]}"
+    msg = f"{type(e).__name__}{f' ({code})' if code else ''}: {str(e)[:200]}"
+    root = root_cause(e)
+    if root is not e:
+        msg += f"  ← 원인: {type(root).__name__}: {str(root)[:200]}"
+    return msg
 
 
 def retryable(e):
@@ -146,6 +159,19 @@ def hint(provider):
     env = KEY_ENV.get(provider, "")
     return (f"→ 확인할 것: ① 이 터미널에 키가 있는지  echo ${env}  (새 터미널·conda 환경을 바꾸면 export를 다시 해야 함)\n"
             f"           ② 모델 ID 철자  ③ 계정에 결제·사용 한도가 남아 있는지")
+
+
+def network_hint(caller):
+    base = str(getattr(caller.client, "base_url", "") or "")
+    proxies = [k for k in os.environ if k.lower() in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")]
+    over = [k for k in os.environ if k.endswith("_BASE_URL")]
+    lines = ["→ 연결 문제 확인:",
+             f"  · 접속 주소: {base or '(기본)'}" + ("  ← 환경 변수 " + ", ".join(over) + " 가 주소를 바꾸고 있어요" if over else ""),
+             f"  · 프록시 환경 변수: {', '.join(proxies) if proxies else '없음'}",
+             "  · 원인에 CERTIFICATE_VERIFY_FAILED 가 있으면 인증서 문제 →  pip install -U certifi  (python.org 파이썬이면 '/Applications/Python 3.x/Install Certificates.command' 실행)",
+             "  · 원인에 nodename/Name or service/getaddrinfo 가 있으면 DNS·인터넷 문제 → VPN·와이파이·방화벽 확인",
+             "  · 터미널에서 직접:  curl -sS -o /dev/null -w '%{http_code}\\n' https://api.anthropic.com/v1/messages   (숫자가 나오면 연결은 됨)"]
+    return "\n".join(lines)
 
 
 def save(path, fieldnames, rows):
@@ -241,6 +267,8 @@ def main():
         sys.exit(f"  ✗ 첫 요청 실패: {e}\n{hint(provider)}")
     except KeyboardInterrupt:
         sys.exit("\n중단했어요.")
+    if note.startswith("error"):  # 연결이 안 되면 나머지를 보내 봐야 똑같다 → 진단을 보여 주고 멈춤
+        sys.exit(f"  ✗ 첫 요청이 {note}로 실패해서 멈춥니다. 위 '원인'을 보세요.\n{network_hint(caller)}")
     record(first, text, served_model, note)
     save(args.csv, fieldnames, rows)
     shown = (text or note or "")[:60].replace("\n", " ")

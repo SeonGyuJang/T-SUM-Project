@@ -26,9 +26,8 @@ from realstar_model.preprocess.dedup import assign_dup_groups   # list[str] -> l
 `manifest.json`에서 서비스가 읽는 키: `model_version`, `thresholds`(단일 `{T_AI, T_HUMAN}` 또는 길이 구간별 `{S:{...}, M:{...}, L:{...}}`), `min_chars`,
 `metrics_summary.sensitivity` / `metrics_summary.specificity`(있으면 Rogan–Gladen 보정값을 결과에 함께 낸다, Phase 8).
 
-> ⚠️ 모델 쪽 확인 필요: MODEL_DEV.md 4.12.2에는 `clean_review`의 인자·반환 필드가 정해져 있지 않다.
-> 위 형태(키워드 인자 `title`, `content`)로 만들거나, 다르게 만들 경우 `service/packages/core/realstar/detection/preprocess.py`의 어댑터 한 곳만 고치면 된다.
-> 이 내용을 모델 작업 때 MODEL_DEV.md 7장 열린 질문으로 올려 주세요(service 작업에서는 model/ 문서를 수정하지 않았습니다).
+> `model/` 패키지(v0.1)가 위 형태로 구현돼 있다(`clean_review(title=..., content=...)` → `CleanResult`).
+> 학습·연결 순서는 [`model/README.md`](../model/README.md).
 
 ## 2. 연결 순서
 
@@ -50,14 +49,14 @@ MODEL_VERSION=det-ko-review-v1.0
 그리고 이미지를 다시 빌드한다(`docker compose up --build`). `model/pyproject.toml`이 있으면 detector 이미지에 자동 설치되고,
 `model/artifacts/`가 `/models`로 마운트된다. GPU를 쓰려면 `docker-compose.yml`의 detector `deploy` 주석을 푼다.
 
-**로컬 단일 프로세스:** `.env`에서 `DETECTOR_MODE=inprocess`, `MODEL_ARTIFACT_PATH=../model/artifacts/det-ko-review-v1.0`.
+**로컬 단일 프로세스:** `.env`에서 `DETECTOR_MODE=inprocess`, `MODEL_ARTIFACT_PATH=../model/artifacts/det-ko-review-v0.1` (학습한 버전 폴더).
 
 ## 3. 연결 확인
 
 - `GET http://localhost:8001/health` → `"ready": true`, `"model_version": "det-ko-review-v1.0"`
 - `GET http://localhost:8000/api/health` → `detector.ready=true`, `preprocess.realstar_model=true`
 - 분석 결과 JSON의 `model.version`이 `det-ko-review-v…`이고 `warnings`에 `dummy_detector`, `preprocess_unavailable`이 없으면 완료.
-- 모델이 없거나 로드에 실패하면 detector `/predict`는 503, 분석은 `failed / detector_unavailable`("AI 판별 모델을 사용할 수 없어요")로 끝난다. 더미로 대신 계산하지 않는다.
+- 모델이 없거나 로드에 실패하면 판별만 건너뛰고 수집 결과(별점 분포·리뷰)를 보여 준다(`DETECTION_FALLBACK=true`, 기본). 더미로 대신 계산하지 않는다.
 
 ## 4. 모델 교체·재학습 시
 

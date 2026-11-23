@@ -78,6 +78,7 @@ import re
 import shutil
 import sys
 import time
+import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -377,7 +378,9 @@ def open_browser(cr: Any, cfg: dict[str, Any]) -> Any:
     if cdp_url:
         from scrapling.fetchers import RemoteSession  # noqa: PLC0415
         if not cdp_alive(cdp_url):
-            raise RuntimeError(f"원격 Chrome({cdp_url})에 연결할 수 없어요. 먼저 `python collect_training_data.py chrome` 을 실행하세요.")
+            port = urllib.parse.urlparse(cdp_url).port or CDP_PORT
+            raise RuntimeError(f"원격 Chrome({cdp_url})에 연결할 수 없어요. 이 포트로 띄운 Chrome이 없어요 → 먼저 "
+                               f"`python collect_training_data.py chrome --port {port}` 을 실행하고 그 창을 켜 둔 채로 다시 실행하세요.")
         # new_context=False: 그 Chrome의 기본 창·쿠키를 그대로 쓴다(이때 언어·UA 같은 설정은 Chrome 자체 값을 따름)
         return RemoteSession(cdp_url=cdp_url, new_context=False, timeout=60000, retries=1)
     extra: dict[str, Any] = {**STEALTH_OPTIONS}

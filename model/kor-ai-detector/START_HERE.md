@@ -8,7 +8,8 @@
 [D] AI 리뷰 수집(팀 작업) ─► [E] 2단계 데이터 ─► [F] 2단계 학습(리뷰) ─► [G] 평가 ─► [H] 웹·홈페이지 확인
 ```
 
-모든 명령은 `model/kor-ai-detector` 폴더에서 실행합니다.
+모든 명령은 `model/kor-ai-detector` 폴더에서 실행합니다 (`cd model/kor-ai-detector`).
+저장소 루트에 있다면 `python model/kor-ai-detector/<스크립트>.py` 처럼 경로를 붙여도 됩니다.
 
 ---
 
@@ -29,7 +30,7 @@ python convert_sources.py                             # 네이버(+쿠팡) → d
 3. 터미널:
    ```bash
    huggingface-cli login          # (또는 hf auth login) 토큰 붙여 넣기
-   python download_lgc.py         # ./XDAC_obs 에 받고 LGC 필드·라벨 값을 출력 (약 1GB)
+   python download_lgc.py         # model/data/raw/XDAC_obs 에 받고 LGC 필드·라벨 값을 출력 (약 1GB)
    ```
 4. 출력된 **필드 이름과 라벨 값**을 보고 [C]의 옵션을 정합니다. 예를 들어 출력이
    `필드: ['text', 'label', 'model', ...]`, `label: {'human': 1300000, 'llm': 1000000}` 이면
@@ -41,7 +42,7 @@ python convert_sources.py                             # 네이버(+쿠팡) → d
 ## [C] 1단계 학습 (LGC 댓글) — AI 리뷰를 기다리지 않고 시작
 
 ```bash
-python prepare_data.py --lgc XDAC_obs/LGC_data/LGC_data_v1.0.json \
+python prepare_data.py --lgc ../data/raw/XDAC_obs/LGC_data/LGC_data_v1.0.json \
   --lgc-text-field <본문필드> --lgc-label-field <라벨필드> --lgc-ai-values <AI값> \
   [--lgc-generator-field <모델필드>] [--lgc-group-field <기사ID필드>] --out data/processed
 ```
@@ -85,7 +86,7 @@ python make_ai_tasks.py make --n 1000 --generators chatgpt claude gemini
 
 ```bash
 python prepare_data.py \
-  --lgc XDAC_obs/LGC_data/LGC_data_v1.0.json --lgc-text-field … --lgc-label-field … --lgc-ai-values … \
+  --lgc ../data/raw/XDAC_obs/LGC_data/LGC_data_v1.0.json --lgc-text-field … --lgc-label-field … --lgc-ai-values … \
   --human-reviews data/raw/naver_human.jsonl \
   --ai-reviews data/raw/ai_chatgpt.jsonl data/raw/ai_claude.jsonl data/raw/ai_gemini.jsonl \
   --human-before 2022-12-01 --holdout-generators gemini --out data/processed
@@ -130,4 +131,4 @@ python export_for_service.py --model models/stage2 --report reports/stage2/repor
 ---
 
 ### 결과물은 git에 올라가지 않습니다
-`data/`, `models/`, `reports/`, `XDAC_obs/`는 `.gitignore`에 들어 있습니다(리뷰 원문·대용량 가중치).
+`model/data/`(네이버·쿠팡·LGC·XDAC 원천 데이터), `data/`, `models/`, `reports/`는 `.gitignore`에 들어 있습니다(리뷰 원문·대용량 가중치).

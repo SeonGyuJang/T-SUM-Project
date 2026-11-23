@@ -164,7 +164,7 @@ pprint(dataset_LGC[0]); pprint(dataset_LGC[-1])
 
 ```bash
 python prepare_data.py \
-  --lgc ./XDAC_obs/LGC_data/LGC_data_v1.0.json \
+  --lgc ../data/raw/XDAC_obs/LGC_data/LGC_data_v1.0.json \
   --lgc-text-field <본문필드> --lgc-label-field <라벨필드> --lgc-ai-values <AI값> \
   --human-reviews data/raw/naver_human.csv \
   --ai-reviews data/raw/ai_chatgpt.jsonl data/raw/ai_claude.jsonl data/raw/ai_gemini.jsonl \

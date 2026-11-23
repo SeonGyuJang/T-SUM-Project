@@ -38,7 +38,8 @@ def get_path(obj, dotted):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--xdac-root", default="./XDAC_obs")
+    ap.add_argument("--xdac-root", default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "raw", "XDAC_obs"),
+                    help="download_lgc.py로 받은 폴더 (기본 model/data/raw/XDAC_obs)")
     ap.add_argument("--data", nargs="+", required=True)
     ap.add_argument("--inspect", action="store_true", help="처음 3개 결과의 구조만 출력하고 종료")
     ap.add_argument("--score-key", help="결과 1건에서 P(AI) 값까지의 점(.) 경로")

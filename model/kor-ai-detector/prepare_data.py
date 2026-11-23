@@ -6,7 +6,7 @@
 
 사용 예:
   python prepare_data.py \
-    --lgc ./XDAC_obs/LGC_data/LGC_data_v1.0.json \
+    --lgc ../data/raw/XDAC_obs/LGC_data/LGC_data_v1.0.json \
     --lgc-text-field text --lgc-label-field label --lgc-ai-values 1 \
     --human-reviews data/raw/naver_human.csv \
     --ai-reviews data/raw/ai_chatgpt.jsonl data/raw/ai_claude.jsonl data/raw/ai_gemini.jsonl \

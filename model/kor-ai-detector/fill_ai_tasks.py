@@ -36,6 +36,10 @@ INSTALL = {"anthropic": "anthropic", "openai": "openai", "google": "google-genai
 CLAUDE_FALLBACK_MODELS = {"claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 FATAL_STATUS = {400, 401, 403, 404}
 TIMEOUT_S = 120  # 요청 하나가 이보다 오래 걸리면 끊고 다시 (SDK 기본값은 10분)
+# brotli(br) 압축 응답을 받지 않는다: 오래된 brotli 패키지가 깔린 환경(예: conda base)에서는 압축을 풀다가
+# "Decompressor.decompress() got an unexpected keyword argument 'output_buffer_limit'"로 실패하고
+# SDK가 이를 Connection error로 보여 준다. gzip이면 파이썬 기본 기능만 쓴다.
+NO_BROTLI = {"Accept-Encoding": "gzip, deflate"}
 
 
 class Fatal(Exception):
@@ -62,13 +66,13 @@ class Caller:
         try:
             if provider == "anthropic":
                 import anthropic
-                self.client = anthropic.Anthropic(max_retries=3, timeout=TIMEOUT_S)
+                self.client = anthropic.Anthropic(max_retries=3, timeout=TIMEOUT_S, default_headers=NO_BROTLI)
             elif provider == "openai":
                 from openai import OpenAI
-                self.client = OpenAI(max_retries=3, timeout=TIMEOUT_S)
+                self.client = OpenAI(max_retries=3, timeout=TIMEOUT_S, default_headers=NO_BROTLI)
             else:
                 from google import genai
-                self.client = genai.Client(http_options={"timeout": TIMEOUT_S * 1000})  # 밀리초
+                self.client = genai.Client(http_options={"timeout": TIMEOUT_S * 1000, "headers": NO_BROTLI})  # 밀리초
         except ImportError:
             sys.exit(f"pip install {INSTALL[provider]}  이 필요합니다.")
         except Exception as e:  # 키가 없으면 클라이언트 생성에서 바로 실패하는 SDK가 있다
@@ -168,6 +172,7 @@ def network_hint(caller):
     lines = ["→ 연결 문제 확인:",
              f"  · 접속 주소: {base or '(기본)'}" + ("  ← 환경 변수 " + ", ".join(over) + " 가 주소를 바꾸고 있어요" if over else ""),
              f"  · 프록시 환경 변수: {', '.join(proxies) if proxies else '없음'}",
+             "  · 원인에 decompress·output_buffer_limit 가 있으면 오래된 brotli 패키지 →  pip install -U brotli brotlicffi",
              "  · 원인에 CERTIFICATE_VERIFY_FAILED 가 있으면 인증서 문제 →  pip install -U certifi  (python.org 파이썬이면 '/Applications/Python 3.x/Install Certificates.command' 실행)",
              "  · 원인에 nodename/Name or service/getaddrinfo 가 있으면 DNS·인터넷 문제 → VPN·와이파이·방화벽 확인",
              "  · 터미널에서 직접:  curl -sS -o /dev/null -w '%{http_code}\\n' https://api.anthropic.com/v1/messages   (숫자가 나오면 연결은 됨)"]

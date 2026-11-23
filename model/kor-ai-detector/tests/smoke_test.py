@@ -316,12 +316,13 @@ def test_fill_ai_tasks():
                 w.writerow([f"gemini-{i:05d}", "gemini", f"p{i}", f"리뷰 써 줘 {i}", ""])
         os.environ["FILL_RETRY_BASE_S"] = "0.01"
         try:
-            out = run("fill_ai_tasks.py", path, "--provider", "fake", "--models", "ok-model", "busy-model", "--concurrency", "1")
+            # 붐비는 모델을 앞에 둬도(시험 요청이 그 모델로 가도) 멈추지 않고 다른 모델로 계속
+            out = run("fill_ai_tasks.py", path, "--provider", "fake", "--models", "busy-model", "ok-model", "--concurrency", "1")
         finally:
             os.environ.pop("FILL_RETRY_BASE_S", None)
         rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
-        ok = [r for i, r in enumerate(rows) if i % 2 == 0]
-        busy = [r for i, r in enumerate(rows) if i % 2 == 1]
+        ok = [r for i, r in enumerate(rows) if i % 2 == 1]
+        busy = [r for i, r in enumerate(rows) if i % 2 == 0]
         assert all(r["text"] for r in ok), ok                                         # 다른 모델은 끝까지 채움
         assert not any(r["text"] for r in busy) and all(r["api_note"] for r in busy)  # 붐비는 모델 행은 기록만
         assert "⏸ busy-model" in out and "--retry-failed" in out, out

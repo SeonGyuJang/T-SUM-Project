@@ -272,6 +272,8 @@ def main():
     ap.add_argument("--max-errors", type=int, default=20, help="오류가 이만큼 연달아 나면 멈춤")
     ap.add_argument("--thinking", choices=["low", "default"], default="low",
                     help="Gemini의 '생각' 단계: low(기본, 빠름) / default(모델 기본값, 느림). Claude는 늘 effort low")
+    ap.add_argument("--reassign-busy", action="store_true",
+                    help="붐벼서 멈춘 모델이 맡은 행을 지금 되는 다른 모델이 대신 채움 (모델 비율은 달라짐)")
     ap.add_argument("--busy-limit", type=int, default=2, help="한 모델이 붐빔(503·429·504)으로 이만큼 연달아 실패하면 이번 실행에서 그 모델은 건너뜀")
     ap.add_argument("--dry-run", action="store_true", help="API 호출 없이 프롬프트 2개만 출력")
     ap.add_argument("--no-system", action="store_true",
@@ -346,44 +348,60 @@ def main():
             save(args.csv, fieldnames, rows)
             state["since_save"] = 0
 
-    # 1) 첫 행은 혼자 먼저 보내 본다: 키·모델명·네트워크 문제를 바로 보여 주기 위해
-    first, todo = todo[0], todo[1:]
-    model0 = models[first % len(models)]
-    print(f"  첫 요청 시험 중… ({model0}, 최대 {TIMEOUT_S}초)", flush=True)
-    t1 = time.time()
-    try:
-        text, served_model, note = call_with_retry(caller, model0, rows[first]["prompt"], tag=rows[first]["task_id"])
-    except Fatal as e:
-        if "(404)" in str(e) or "NOT_FOUND" in str(e):
-            sys.exit(f"  ✗ 첫 요청 실패: {e}\n→ 키는 정상이에요. 모델 {model0} 을(를) 이 계정에서 쓸 수 없어요(이름이 틀렸거나, 신규 사용자에게 막힌 모델).\n"
-                     f"  --models 에서 이 모델을 빼거나 다른 모델로 바꿔 다시 실행하세요. 이미 채운 행은 그대로 남아요.")
-        sys.exit(f"  ✗ 첫 요청 실패: {e}\n{hint(provider)}")
-    except KeyboardInterrupt:
-        sys.exit("\n중단했어요.")
-    if note in ("error(503)", "error(429)", "error(500)", "error(502)", "error(504)"):
-        # 서버 혼잡·요청 한도: 네트워크 문제가 아니다. 아직 채운 게 없으니 모델 순서를 바꿔도 된다
-        sys.exit(f"  ✗ 첫 요청이 {note}로 실패해서 멈춥니다. {model0} 서버가 지금 붐비거나(503) 요청 한도에 걸렸어요(429).\n"
-                 f"  → 몇 분 뒤 같은 명령으로 다시 하거나, 다른 모델을 앞에 두고 시작하세요(예: --models {' '.join(models[1:] + models[:1])})."
-                 f"\n    중간에 붐비는 행은 건너뛰고 api_note에 남으니, 나중에 --retry-failed 로 채우면 됩니다.")
-    if note.startswith("error"):  # 연결이 안 되면 나머지를 보내 봐야 똑같다 → 진단을 보여 주고 멈춤
-        sys.exit(f"  ✗ 첫 요청이 {note}로 실패해서 멈춥니다. 위 '원인'을 보세요.\n{network_hint(caller)}")
-    record(first, text, served_model, note)
-    save(args.csv, fieldnames, rows)
-    shown = (text or note or "")[:60].replace("\n", " ")
-    print(f"  ✓ {time.time() - t1:.1f}초 · {served_model} · {shown!r}", flush=True)
-
-    # 2) 나머지는 동시에
     # 모델별 '붐빔' 차단기: 한 모델이 503·429·504로 연달아 실패하면 이번 실행에서는 그 모델 행을 바로 건너뛴다.
     # (붐비는 모델 행이 동시 요청 칸을 몇 분씩 붙잡아 다른 모델까지 멈추는 것을 막음. 건너뛴 행은 나중에 --retry-failed)
     busy_streak, paused, inflight = Counter(), set(), Counter()
     plock = threading.Lock()
 
+    # 1) 모델마다 첫 행을 하나씩 먼저 보내 본다: 키·모델명·네트워크 문제를 바로 보여 주고,
+    #    붐비는 모델은 이번 실행에서 빼고 나머지 모델로 계속한다(전부 붐빌 때만 멈춤)
+    ok_models, idle = [], []
+    for m in models:
+        mine = [i for i in todo if models[i % len(models)] == m]
+        if not mine:
+            idle.append(m)  # 이 모델 몫은 이미 다 채움 (--reassign-busy면 대신 맡을 수 있음)
+            continue
+        first = mine[0]
+        todo.remove(first)
+        print(f"  시험 요청… ({m}, 최대 {TIMEOUT_S}초)", flush=True)
+        t1 = time.time()
+        try:
+            text, served_model, note = call_with_retry(caller, m, rows[first]["prompt"], tries=2, tag=rows[first]["task_id"])
+        except Fatal as e:
+            if "(404)" in str(e) or "NOT_FOUND" in str(e):
+                sys.exit(f"  ✗ 시험 요청 실패: {e}\n→ 키는 정상이에요. 모델 {m} 을(를) 이 계정에서 쓸 수 없어요(이름이 틀렸거나, 신규 사용자에게 막힌 모델).\n"
+                         f"  --models 에서 이 모델을 빼거나 다른 모델로 바꿔 다시 실행하세요. 이미 채운 행은 그대로 남아요.")
+            sys.exit(f"  ✗ 시험 요청 실패: {e}\n{hint(provider)}")
+        except KeyboardInterrupt:
+            save(args.csv, fieldnames, rows)
+            sys.exit("\n중단했어요.")
+        record(first, text, served_model, note)
+        save(args.csv, fieldnames, rows)
+        if note in BUSY_NOTES:  # 서버 혼잡·요청 한도: 이 모델만 이번 실행에서 뺀다
+            paused.add(m)
+            print(f"  ⏸ {m} 서버가 지금 붐벼서({note}) 이번 실행에서는 이 모델 행을 건너뜁니다. 나중에 --retry-failed 로 채우세요.",
+                  flush=True)
+            continue
+        if note.startswith("error"):  # 연결이 안 되면 나머지를 보내 봐야 똑같다 → 진단을 보여 주고 멈춤
+            sys.exit(f"  ✗ 시험 요청이 {note}로 실패해서 멈춥니다. 위 '원인'을 보세요.\n{network_hint(caller)}")
+        ok_models.append(m)
+        shown = (text or note or "")[:60].replace("\n", " ")
+        print(f"  ✓ {time.time() - t1:.1f}초 · {served_model} · {shown!r}", flush=True)
+    if args.reassign_busy and paused:
+        ok_models += idle
+    if not ok_models and paused:
+        sys.exit(f"  ✗ 모든 모델({', '.join(models)})이 지금 붐벼요. 몇 분~몇십 분 뒤 같은 명령으로 다시 실행하세요.")
+
+    # 2) 나머지는 동시에
     def work(i):
         if stop.is_set():
             return i, None, None, "skipped"
         model = models[i % len(models)]  # 행 번호로 번갈아 → 다시 실행해도 같은 행은 같은 모델
         if model in paused:
-            return i, None, model, f"busy({model})"
+            alive = [m for m in ok_models if m not in paused]
+            if not (args.reassign_busy and alive):
+                return i, None, model, f"busy({model})"
+            model = alive[i % len(alive)]  # 붐비는 모델 몫을 지금 되는 모델이 대신 맡음
         with plock:
             inflight[model] += 1
         try:
@@ -455,7 +473,8 @@ def main():
 
     if paused:
         skipped_busy = sum(1 for r in rows if (r.get("api_note") or "").startswith(("busy(", "error(5", "error(429")))
-        print(f"\n  ⏸ 붐벼서 건너뛴 모델: {sorted(paused)} · 건너뛴 행 {skipped_busy:,}건 → 나중에 같은 명령에 --retry-failed")
+        print(f"\n  ⏸ 붐벼서 건너뛴 모델: {sorted(paused)} · 건너뛴 행 {skipped_busy:,}건 → 나중에 같은 명령에 --retry-failed"
+              + ("" if args.reassign_busy else "  (기다리기 싫으면 --retry-failed --reassign-busy: 다른 모델이 대신 채움)"))
     left = sum(1 for r in rows if not (r.get("text") or "").strip())
     print(f"\n저장 → {args.csv} · 이번에 {dict(stats)} · 실제 답한 모델 {dict(served)} · 남은 빈 칸 {left:,}")
     if state["fatal"]:

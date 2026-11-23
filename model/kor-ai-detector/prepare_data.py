@@ -129,11 +129,12 @@ def build_review_rows(paths, label, args, stats):
 def inspect_lgc(path, n=3):
     """LGC 파일 구조를 보여 줍니다: 필드 이름, 예시 레코드, 값 종류가 적은 필드(라벨 후보)의 분포."""
     rows = read_any(path)
-    print(f"레코드 {len(rows):,}건 · 필드: {list(rows[0].keys())}")
+    keys = list(dict.fromkeys(k for r in rows[:5000] for k in r))  # 레코드마다 필드가 다를 수 있어 합쳐서 본다
+    print(f"레코드 {len(rows):,}건 · 필드: {keys}")
     for r in rows[:n] + rows[-1:]:
         print(json.dumps({k: (str(v)[:80] if isinstance(v, str) else v) for k, v in r.items()}, ensure_ascii=False))
     print("\n[값 종류가 20개 이하인 필드 = 라벨·생성 모델 후보]")
-    for k in rows[0]:
+    for k in keys:
         vals = Counter(str(r.get(k)) for r in rows[:200000])
         if len(vals) <= 20:
             print(f"  {k}: {dict(vals.most_common(20))}")

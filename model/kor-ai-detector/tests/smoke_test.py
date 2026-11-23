@@ -289,7 +289,7 @@ def test_fill_ai_tasks():
             for i in range(9):
                 prompt = "이건 거절해 줘" if i == 4 else ("말로 거절하는 경우" if i == 7 else f"리뷰 써 줘 {i}")
                 w.writerow([f"claude-{i:05d}", "claude", f"p{i}", prompt,
-                            "이미 채움" if i == 0 else "", "m0" if i == 0 else ""])
+                            "이미 채움" if i == 0 else ("가짜 리뷰라 도와드리기 어렵습니다" if i == 8 else ""), "m0" if i in (0, 8) else ""])
         out = run("fill_ai_tasks.py", path, "--provider", "fake", "--models", "a", "b", "--limit", "5", "--save-every", "2")
         rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
         assert rows[0]["text"] == "이미 채움" and rows[0]["model_version"] == "m0"   # 채운 칸은 건드리지 않음
@@ -297,12 +297,14 @@ def test_fill_ai_tasks():
         assert len(filled) == 4 and rows[4]["api_note"].startswith("refusal"), rows   # 4번은 거절로 기록
         assert {r["model_version"] for r in filled} == {"a", "b"}                     # 모델 번갈아
         assert all(not r["text"] for r in rows[6:])                                   # --limit 5
+        assert rows[8]["api_note"] == "text_refusal"                                  # 예전에 저장된 거절 문구는 비움
+        assert "거절 문구가 저장된 1행" in out
         run("fill_ai_tasks.py", path, "--provider", "fake", "--models", "a", "b")     # 이어서: 나머지만
         rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
-        assert sum(1 for r in rows if r["text"]) == 7 and not rows[4]["text"], "남은 빈 칸 = 거절 2건"
+        assert sum(1 for r in rows if r["text"]) == 6 and not rows[4]["text"], "남은 빈 칸 = 거절 3건"
         assert rows[7]["api_note"] == "text_refusal" and not rows[7]["text"]          # 말로 한 거절은 리뷰로 저장 안 함
         run("make_ai_tasks.py", "merge", path, "--out", d)
-        assert len(load(os.path.join(d, "ai_claude.jsonl"))) == 7
+        assert len(load(os.path.join(d, "ai_claude.jsonl"))) == 6
         assert "실제 답한 모델" in out
     print("✓ fill_ai_tasks(빈 칸만 채우기·모델 번갈아·거절 기록·이어서 하기)")
 

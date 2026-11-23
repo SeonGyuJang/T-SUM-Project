@@ -256,6 +256,14 @@ def main():
     if not models:
         sys.exit(f"{provider}는 쓸 모델을 --models 로 지정하세요 (해당 서비스 문서의 모델 ID).")
 
+    # 예전 실행에서 거절 문구가 리뷰로 저장된 행을 비운다(다시 채우려면 --retry-failed)
+    bad = [r for r in rows if looks_refused((r.get("text") or "").strip())]
+    for r in bad:
+        r["text"], r["api_note"] = "", "text_refusal"
+    if bad:
+        save(args.csv, fieldnames, rows)
+        print(f"  · 이전에 리뷰 대신 거절 문구가 저장된 {len(bad)}행을 비웠어요 ({', '.join(r['task_id'] for r in bad[:5])}"
+              f"{' …' if len(bad) > 5 else ''})")
     todo = [i for i, r in enumerate(rows)
             if not (r.get("text") or "").strip() and (args.retry_failed or not (r.get("api_note") or "").strip())]
     if args.limit:

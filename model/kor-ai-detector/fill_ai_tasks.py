@@ -86,9 +86,11 @@ def status_of(e):
 class Caller:
     """provider별 '프롬프트 1개 → (답, 실제 모델명, 메모)'. SDK는 처음 쓸 때 불러온다."""
 
-    def __init__(self, provider, system=SYSTEM_PROMPT):
+    def __init__(self, provider, system=SYSTEM_PROMPT, thinking="low"):
         self.provider = provider
         self.system = system
+        self.thinking = thinking
+        self.no_thinking_cfg = set()  # thinking 설정을 거부한 모델(이후엔 빼고 보냄)
         self.client = None
         if provider == "fake":
             return
@@ -131,14 +133,38 @@ class Caller:
             if ch.finish_reason == "content_filter" or not (ch.message.content or "").strip():
                 return None, r.model, f"empty({ch.finish_reason})"
             return ch.message.content.strip(), r.model, ""
-        cfg = {"system_instruction": self.system} if self.system else None
-        r = self.client.models.generate_content(model=model, contents=prompt, config=cfg)
+        r = self._gemini(model, prompt)
         text = (getattr(r, "text", None) or "").strip()
         served = getattr(r, "model_version", None) or model
         if not text:
             fb = getattr(r, "prompt_feedback", None)
             return None, served, f"empty({getattr(fb, 'block_reason', None) or 'no text'})"
         return text, served, ""
+
+    def gemini_thinking(self, model):
+        """짧은 리뷰라 '생각' 단계를 최소로: 2.x는 thinking_budget(pro는 0이 안 돼 최소 128), 3.x 이후는 thinking_level=low.
+        Gemini의 생각 단계가 응답을 수십 초씩 늦추는 주원인이다."""
+        if self.thinking != "low" or model in self.no_thinking_cfg:
+            return None
+        if model.startswith("gemini-2"):
+            return {"thinking_budget": 128 if "pro" in model else 0}
+        return {"thinking_level": "low"}
+
+    def _gemini(self, model, prompt):
+        cfg = {}
+        if self.system:
+            cfg["system_instruction"] = self.system
+        th = self.gemini_thinking(model)
+        if th:
+            cfg["thinking_config"] = th
+        try:
+            return self.client.models.generate_content(model=model, contents=prompt, config=cfg or None)
+        except Exception as e:  # 이 모델이 thinking 설정을 안 받으면 빼고 다시(이후 계속 뺌)
+            if th and status_of(e) == 400 and "think" in str(e).lower():
+                self.no_thinking_cfg.add(model)
+                cfg.pop("thinking_config", None)
+                return self.client.models.generate_content(model=model, contents=prompt, config=cfg or None)
+            raise
 
     def _claude(self, model, prompt):
         kwargs = {"model": model, "max_tokens": 16000, "output_config": {"effort": "low"},  # 짧은 리뷰라 low
@@ -239,10 +265,13 @@ def main():
     ap.add_argument("--models", nargs="+", help="쓸 모델 ID (여러 개면 행을 번갈아). Claude 기본 claude-opus-5-5")
     ap.add_argument("--provider", choices=["anthropic", "openai", "google", "fake"], help="보통 generator 칸으로 자동 결정")
     ap.add_argument("--limit", type=int, default=0, help="이번에 채울 최대 행 수 (시험용)")
-    ap.add_argument("--concurrency", type=int, default=4, help="동시 요청 수 (요청 한도에 걸리면 줄이세요)")
+    ap.add_argument("--concurrency", type=int, default=3,
+                    help="모델마다 동시 요청 수 (요청 한도에 걸리면 줄이세요). 느린 모델이 빠른 모델을 막지 않게 모델별로 따로 셈")
     ap.add_argument("--save-every", type=int, default=10)
     ap.add_argument("--retry-failed", action="store_true", help="거절·오류로 넘어간 행(api_note 있음)도 다시 시도")
     ap.add_argument("--max-errors", type=int, default=20, help="오류가 이만큼 연달아 나면 멈춤")
+    ap.add_argument("--thinking", choices=["low", "default"], default="low",
+                    help="Gemini의 '생각' 단계: low(기본, 빠름) / default(모델 기본값, 느림). Claude는 늘 effort low")
     ap.add_argument("--busy-limit", type=int, default=2, help="한 모델이 붐빔(503·429·504)으로 이만큼 연달아 실패하면 이번 실행에서 그 모델은 건너뜀")
     ap.add_argument("--dry-run", action="store_true", help="API 호출 없이 프롬프트 2개만 출력")
     ap.add_argument("--no-system", action="store_true",
@@ -296,7 +325,7 @@ def main():
             sys.exit(msg)
         print(f"  ⚠ {msg} (ant auth login 으로 로그인했다면 그대로 진행)")
 
-    caller = Caller(provider, system=None if args.no_system else SYSTEM_PROMPT)
+    caller = Caller(provider, system=None if args.no_system else SYSTEM_PROMPT, thinking=args.thinking)
     stats, served = Counter(), Counter()
     state = {"since_save": 0, "streak": 0, "fatal": None}
     stop = threading.Event()
@@ -379,9 +408,11 @@ def main():
     t0 = time.time()
     total = len(todo)
     n = 0
-    ex = ThreadPoolExecutor(max_workers=max(1, args.concurrency))
+    # 모델마다 실행기를 따로 둔다: 느리거나 붐비는 모델이 요청 자리를 붙잡아도 다른 모델은 제 속도로 진행
+    executors = {m: ThreadPoolExecutor(max_workers=max(1, args.concurrency)) for m in models}
+    interrupted = False
     try:
-        pending = {ex.submit(work, i) for i in todo}
+        pending = {executors[models[i % len(models)]].submit(work, i) for i in todo}
         while pending:
             finished, pending = wait(pending, timeout=15, return_when=FIRST_COMPLETED)
             if not finished:  # 15초 동안 하나도 안 끝남 → 살아 있다고 알림
@@ -409,10 +440,15 @@ def main():
                     f.cancel()
     except KeyboardInterrupt:
         stop.set()
-        print("\n중단했어요. 지금 보내 둔 요청만 마무리하고 저장합니다…", flush=True)
+        interrupted = True
+        print("\n중단했어요. 지금까지 받은 답을 저장하고 바로 끝냅니다(보내 둔 요청의 답은 버림)…", flush=True)
     finally:
-        ex.shutdown(wait=True, cancel_futures=True)  # 아직 시작 안 한 요청은 버림
+        for ex in executors.values():
+            ex.shutdown(wait=not interrupted, cancel_futures=True)  # 아직 시작 안 한 요청은 버림
         save(args.csv, fieldnames, rows)
+    if interrupted:  # 진행 중인 요청(최대 120초)을 기다리지 않고 바로 종료
+        print(f"저장 → {args.csv} · 이번에 {dict(stats)} · 같은 명령으로 다시 실행하면 이어서 해요.", flush=True)
+        os._exit(130)
 
     if paused:
         skipped_busy = sum(1 for r in rows if (r.get("api_note") or "").startswith(("busy(", "error(5", "error(429")))

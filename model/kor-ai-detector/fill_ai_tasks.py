@@ -26,7 +26,7 @@ import sys
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 PROVIDER_OF = {"chatgpt": "openai", "gpt": "openai", "openai": "openai", "claude": "anthropic", "gemini": "google"}
 DEFAULT_MODELS = {"anthropic": ["claude-opus-5-5"]}  # OpenAI·Gemini는 쓸 모델을 --models 로 직접 정합니다
@@ -35,6 +35,7 @@ INSTALL = {"anthropic": "anthropic", "openai": "openai", "google": "google-genai
 # 서버 쪽 거절 시 다른 모델로 이어 주는 기능(fallbacks)을 받는 Claude 모델
 CLAUDE_FALLBACK_MODELS = {"claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 FATAL_STATUS = {400, 401, 403, 404}
+TIMEOUT_S = 120  # 요청 하나가 이보다 오래 걸리면 끊고 다시 (SDK 기본값은 10분)
 
 
 class Fatal(Exception):
@@ -61,13 +62,13 @@ class Caller:
         try:
             if provider == "anthropic":
                 import anthropic
-                self.client = anthropic.Anthropic(max_retries=5)
+                self.client = anthropic.Anthropic(max_retries=3, timeout=TIMEOUT_S)
             elif provider == "openai":
                 from openai import OpenAI
-                self.client = OpenAI(max_retries=5)
+                self.client = OpenAI(max_retries=3, timeout=TIMEOUT_S)
             else:
                 from google import genai
-                self.client = genai.Client()
+                self.client = genai.Client(http_options={"timeout": TIMEOUT_S * 1000})  # 밀리초
         except ImportError:
             sys.exit(f"pip install {INSTALL[provider]}  이 필요합니다.")
         except Exception as e:  # 키가 없으면 클라이언트 생성에서 바로 실패하는 SDK가 있다
@@ -110,19 +111,41 @@ class Caller:
         return (text or None), r.model, "" if text else "empty"
 
 
-def call_with_retry(caller, model, prompt, tries=4):
-    """SDK 자체 재시도 뒤에도 429·5xx·연결 오류면 조금 더 기다렸다 다시. 401·403·404·400은 Fatal."""
+def describe(e):
+    code = status_of(e)
+    return f"{type(e).__name__}{f' ({code})' if code else ''}: {str(e)[:300]}"
+
+
+def retryable(e):
+    """요청 한도·서버 오류·연결/시간 초과만 다시 해 볼 만하다. 키 없음(TypeError)·모델명 오류(4xx) 등은 아님."""
+    code = status_of(e)
+    if code is not None:
+        return code == 429 or code >= 500 or code in (408, 409)
+    name = type(e).__name__.lower()
+    return any(k in name for k in ("connection", "timeout", "timedout", "servererror", "unavailable"))
+
+
+def call_with_retry(caller, model, prompt, tries=3, log=print, tag=""):
+    """SDK 자체 재시도 뒤에도 429·5xx·연결 오류면 조금 더 기다렸다 다시. 그 밖의 오류는 Fatal(전체 중단)."""
     for attempt in range(tries):
         try:
             return caller(model, prompt)
         except Exception as e:
-            code = status_of(e)
-            if code in FATAL_STATUS:
-                raise Fatal(f"{type(e).__name__} ({code}): {str(e)[:300]}") from e
+            if not retryable(e):
+                raise Fatal(describe(e)) from e
             if attempt == tries - 1:
-                return None, model, f"error({code or type(e).__name__})"
-            time.sleep(min(60, 5 * 2 ** attempt))
+                log(f"  ✗ {tag} {describe(e)[:160]} → 건너뜀")
+                return None, model, f"error({status_of(e) or type(e).__name__})"
+            wait_s = min(60, 10 * 2 ** attempt)
+            log(f"  ↻ {tag} {describe(e)[:120]} → {wait_s}초 뒤 다시")
+            time.sleep(wait_s)
     return None, model, "error"
+
+
+def hint(provider):
+    env = KEY_ENV.get(provider, "")
+    return (f"→ 확인할 것: ① 이 터미널에 키가 있는지  echo ${env}  (새 터미널·conda 환경을 바꾸면 export를 다시 해야 함)\n"
+            f"           ② 모델 ID 철자  ③ 계정에 결제·사용 한도가 남아 있는지")
 
 
 def save(path, fieldnames, rows):
@@ -179,65 +202,99 @@ def main():
     if not todo:
         print("채울 행이 없습니다.")
         return
-    if provider != "fake" and not os.environ.get(KEY_ENV[provider]) and provider != "anthropic":
-        sys.exit(f"환경 변수 {KEY_ENV[provider]} 에 API 키를 넣어 주세요 (export {KEY_ENV[provider]}=...).")
+    if provider != "fake" and not os.environ.get(KEY_ENV[provider]):
+        # Claude는 `ant auth login` 프로필로도 되므로 경고만, 나머지는 키가 꼭 필요
+        msg = f"환경 변수 {KEY_ENV[provider]} 가 비어 있어요. 이 터미널에서 export {KEY_ENV[provider]}=... 를 먼저 실행하세요."
+        if provider != "anthropic":
+            sys.exit(msg)
+        print(f"  ⚠ {msg} (ant auth login 으로 로그인했다면 그대로 진행)")
 
     caller = Caller(provider)
-    lock = threading.Lock()
     stats, served = Counter(), Counter()
     state = {"since_save": 0, "streak": 0, "fatal": None}
     stop = threading.Event()
-    t0 = time.time()
 
+    def record(i, text, model, note):
+        r = rows[i]
+        if text:
+            r["text"], r["model_version"], r["api_note"] = text, model, ""
+            stats["ok"] += 1
+            served[model] += 1
+            state["streak"] = 0
+        else:
+            r["api_note"] = note
+            stats[note.split("(")[0]] += 1
+            state["streak"] = state["streak"] + 1 if note.startswith("error") else 0
+        state["since_save"] += 1
+        if state["since_save"] >= args.save_every:
+            save(args.csv, fieldnames, rows)
+            state["since_save"] = 0
+
+    # 1) 첫 행은 혼자 먼저 보내 본다: 키·모델명·네트워크 문제를 바로 보여 주기 위해
+    first, todo = todo[0], todo[1:]
+    model0 = models[first % len(models)]
+    print(f"  첫 요청 시험 중… ({model0}, 최대 {TIMEOUT_S}초)", flush=True)
+    t1 = time.time()
+    try:
+        text, served_model, note = call_with_retry(caller, model0, rows[first]["prompt"], tag=rows[first]["task_id"])
+    except Fatal as e:
+        sys.exit(f"  ✗ 첫 요청 실패: {e}\n{hint(provider)}")
+    except KeyboardInterrupt:
+        sys.exit("\n중단했어요.")
+    record(first, text, served_model, note)
+    save(args.csv, fieldnames, rows)
+    shown = (text or note or "")[:60].replace("\n", " ")
+    print(f"  ✓ {time.time() - t1:.1f}초 · {served_model} · {shown!r}", flush=True)
+
+    # 2) 나머지는 동시에
     def work(i):
         if stop.is_set():
             return i, None, None, "skipped"
         model = models[i % len(models)]  # 행 번호로 번갈아 → 다시 실행해도 같은 행은 같은 모델
         try:
-            return (i, *call_with_retry(caller, model, rows[i]["prompt"]))
+            return (i, *call_with_retry(caller, model, rows[i]["prompt"], tag=rows[i]["task_id"]))
         except Fatal as e:
             stop.set()
             state["fatal"] = str(e)
             return i, None, model, "fatal"
 
+    t0 = time.time()
+    total = len(todo)
+    n = 0
+    ex = ThreadPoolExecutor(max_workers=max(1, args.concurrency))
     try:
-        with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as ex:
-            futs = [ex.submit(work, i) for i in todo]
-            for n, fut in enumerate(as_completed(futs), 1):
+        pending = {ex.submit(work, i) for i in todo}
+        while pending:
+            finished, pending = wait(pending, timeout=15, return_when=FIRST_COMPLETED)
+            if not finished:  # 15초 동안 하나도 안 끝남 → 살아 있다고 알림
+                print(f"  … 응답 기다리는 중 ({n:,}/{total:,} 완료, 경과 {time.time() - t0:.0f}초)", flush=True)
+                continue
+            for fut in finished:
                 i, text, model, note = fut.result()
-                with lock:
-                    if note in ("skipped", "fatal"):
-                        continue
-                    r = rows[i]
-                    if text:
-                        r["text"], r["model_version"], r["api_note"] = text, model, ""
-                        stats["ok"] += 1
-                        served[model] += 1
-                        state["streak"] = 0
-                    else:
-                        r["api_note"] = note
-                        stats[note.split("(")[0]] += 1
-                        state["streak"] = state["streak"] + 1 if note.startswith("error") else 0
-                    state["since_save"] += 1
-                    if state["since_save"] >= args.save_every:
-                        save(args.csv, fieldnames, rows)
-                        state["since_save"] = 0
-                    if n % 10 == 0 or n == len(todo):
-                        rate = n / max(1e-9, time.time() - t0)
-                        print(f"  {n:,}/{len(todo):,} · {dict(stats)} · {rate * 60:.0f}건/분", flush=True)
-                    if state["streak"] >= args.max_errors and not stop.is_set():
-                        print(f"  ⚠ 오류가 {state['streak']}번 연달아 나서 멈춥니다(네트워크·요청 한도 확인). 다시 실행하면 이어서 해요.")
-                        stop.set()
+                if note in ("skipped", "fatal"):
+                    continue
+                n += 1
+                record(i, text, model, note)
+                if n <= 3 or n % 10 == 0 or n == total:
+                    rate = n / max(1e-9, time.time() - t0)
+                    print(f"  {n:,}/{total:,} · {dict(stats)} · {rate * 60:.0f}건/분", flush=True)
+                if state["streak"] >= args.max_errors and not stop.is_set():
+                    print(f"  ⚠ 오류가 {state['streak']}번 연달아 나서 멈춥니다(네트워크·요청 한도 확인). 다시 실행하면 이어서 해요.")
+                    stop.set()
+            if stop.is_set():
+                for f in pending:
+                    f.cancel()
     except KeyboardInterrupt:
         stop.set()
-        print("\n중단했어요. 지금까지 채운 행은 저장합니다.")
+        print("\n중단했어요. 지금 보내 둔 요청만 마무리하고 저장합니다…", flush=True)
     finally:
+        ex.shutdown(wait=True, cancel_futures=True)  # 아직 시작 안 한 요청은 버림
         save(args.csv, fieldnames, rows)
 
     left = sum(1 for r in rows if not (r.get("text") or "").strip())
     print(f"\n저장 → {args.csv} · 이번에 {dict(stats)} · 실제 답한 모델 {dict(served)} · 남은 빈 칸 {left:,}")
     if state["fatal"]:
-        sys.exit(f"⚠ 멈춤: {state['fatal']}\n→ API 키({KEY_ENV.get(provider)})와 모델 ID를 확인하세요.")
+        sys.exit(f"⚠ 멈춤: {state['fatal']}\n{hint(provider)}")
     if stats.get("refusal") or stats.get("empty"):
         print("  거절·빈 답은 api_note에 적어 두었어요. 몇 건이면 그대로 두고, 많으면 해당 프롬프트를 확인하세요.")
 

@@ -225,13 +225,29 @@ def test_convert_and_tasks():
              "created_at": "2021-03-01", "period": "pre_chatgpt", "product_name": "가짜 텀블러"},
             {"review_id": "cp-777-2", "star": 5, "content": "최근 리뷰", "created_at": "2025-01-01", "period": "post_chatgpt"}]}}},
             open(cp, "w", encoding="utf-8"), ensure_ascii=False)
+        # AI Hub 속성기반 감정분석 흉내: 구분 폴더 안 JSON 배열
+        ah = os.path.join(d, "AI_hub", "pre", "TL_쇼핑몰_01.패션_1-1.여성의류")
+        os.makedirs(ah)
+        recs = [{"Index": str(i), "RawText": f"사이즈가 작아요 {i}", "Source": "쇼핑몰", "Domain": "패션", "MainCategory": "여성의류",
+                 "ProductName": "OO 스** 티셔츠 4종세트" if i < 6 else "OO 니트 라** 세트", "ReviewScore": ["20", "100", "70", "90"][i % 4],
+                 "RDate": "20221215" if i == 9 else "20211010", "GeneralPolarity": "-1", "Aspects": []} for i in range(10)]
+        json.dump(recs, open(os.path.join(ah, "a.json"), "w", encoding="utf-8"), ensure_ascii=False)
         raw = os.path.join(d, "raw")
-        run("convert_sources.py", "--naver", nv, "--coupang", cp, "--out", raw)
-        n, c = load(os.path.join(raw, "naver_human.jsonl")), load(os.path.join(raw, "coupang_human.jsonl"))
+        merged = os.path.join(raw, "human_reviews.jsonl")
+        out = run("convert_sources.py", "--aihub", os.path.join(d, "AI_hub", "pre"), "--naver", nv, "--coupang", cp, "--out", merged)
+        rows_all = load(merged)
+        n = [r for r in rows_all if r["platform"] == "naver"]
+        c = [r for r in rows_all if r["platform"] == "coupang"]
+        a = [r for r in rows_all if r["platform"] == "aihub"]
         assert len(n) == 50 and n[0]["product_id"] == "nv-0000" and n[0]["date"] == "2020-07-31"
         assert len(c) == 1 and c[0]["text"] == "보온 잘 돼요" and c[0]["product_id"] == "cp-777"
+        assert len(a) == 9, a                                   # 2022-12-15 리뷰는 제외
+        assert {r["rating"] for r in a} == {1, 5, 4} and a[0]["date"] == "2021-10-10"
+        assert a[0]["category"] == "패션 > 여성의류" and a[0]["product_name"] == "티셔츠 4종세트"
+        assert len({r["product_id"] for r in a}) == 2           # 상품명별로 묶임
+        assert "합친 사람 리뷰" in out
         tasks = os.path.join(d, "tasks")
-        run("make_ai_tasks.py", "make", "--human", os.path.join(raw, "naver_human.jsonl"), os.path.join(raw, "coupang_human.jsonl"),
+        run("make_ai_tasks.py", "make", "--human", merged,
             "--n", "12", "--generators", "chatgpt", "claude", "--out", tasks)
         path = os.path.join(tasks, "tasks_claude.csv")
         rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
@@ -248,16 +264,16 @@ def test_convert_and_tasks():
         ai = load(os.path.join(raw, "ai_claude.jsonl"))
         assert len(ai) == 8 and all(r["generator"] == "claude" and r["product_id"] for r in ai)
         # 채운 작업표는 덮어쓰지 않음 → --batch 로 새 묶음, 이전 기준 리뷰는 피함
-        r = subprocess.run([PY, "make_ai_tasks.py", "make", "--human", os.path.join(raw, "naver_human.jsonl"),
+        r = subprocess.run([PY, "make_ai_tasks.py", "make", "--human", merged,
                             "--n", "5", "--generators", "claude", "--out", tasks], cwd=ROOT, capture_output=True, text=True)
         assert r.returncode != 0 and "덮어쓰지 않습니다" in (r.stdout + r.stderr), r.stdout + r.stderr
-        run("make_ai_tasks.py", "make", "--human", os.path.join(raw, "naver_human.jsonl"),
+        run("make_ai_tasks.py", "make", "--human", merged,
             "--n", "5", "--generators", "claude", "--batch", "b2", "--out", tasks)
         b2 = list(csv.DictReader(open(os.path.join(tasks, "tasks_claude_b2.csv"), encoding="utf-8-sig")))
         assert len(b2) == 5 and b2[0]["task_id"].startswith("claude-b2-")
         assert not {x["anchor_id"] for x in b2} & {x["anchor_id"] for x in rows}
         assert len(load(os.path.join(raw, "ai_claude.jsonl"))) == 8  # 원래 작업표는 그대로
-    print("✓ convert_sources(네이버·쿠팡 → 공통 형식) + make_ai_tasks(작업표 만들기·합치기·추가 묶음)")
+    print("✓ convert_sources(AI Hub·네이버·쿠팡 → 파일 하나) + make_ai_tasks(작업표 만들기·합치기·추가 묶음)")
 
 
 def test_anchor_mix_and_matching():

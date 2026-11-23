@@ -12,7 +12,7 @@
 
 설계 (README 4.5 분포 맞추기):
 - 기준 리뷰의 product_id를 AI 리뷰에도 그대로 기록 → 원본과 생성본이 같은 split에 묶여 누출이 없다.
-- 기준 리뷰는 출처별로 고르게: 쿠팡 몫(--coupang-share, 기본 50%)을 쿠팡 카테고리마다 똑같이, 나머지를 네이버에서.
+- 기준 리뷰는 출처별로 고르게: 카테고리 몫(--category-share, 기본 50%)을 AI Hub·쿠팡 카테고리마다 똑같이, 나머지를 네이버에서.
 - 별점은 기준 리뷰의 별점, 목표 길이는 같은 출처·별점 사람 리뷰의 길이 분포에서 뽑는다(LLM은 사람보다 길게 쓴다).
 - 유형: scratch 40% / style 30% / rewrite 30%. 네이버 말뭉치는 상품명이 없어 scratch·style도 기준 리뷰로 상품을 알려 준다.
 - 페르소나·말투·이모지·오타 허용 여부를 무작위 조합한다. 한 대화에 하나씩 요청한다(여러 개를 한 번에 받으면 비슷해진다).
@@ -82,9 +82,9 @@ def build_prompt(kind, anchor, examples, rating, target, persona, tone, extra):
 
 
 def source_of(r):
-    """기준 리뷰의 출처 칸: 쿠팡은 카테고리별, 네이버는 하나(카테고리 정보 없음)."""
+    """기준 리뷰의 출처 칸: 카테고리가 있는 출처(AI Hub·쿠팡)는 카테고리별, 네이버는 하나(카테고리 정보 없음)."""
     plat = r.get("platform") or "?"
-    return f"{plat}:{r.get('category') or '-'}" if plat == "coupang" else plat
+    return f"{plat}:{r['category']}" if r.get("category") else plat
 
 
 def read_existing(out_dir):
@@ -99,15 +99,15 @@ def read_existing(out_dir):
 
 
 def plan_sources(pool, coupang_share, total, cap=0.5):
-    """출처별 뽑을 비율. 쿠팡 몫(coupang_share)을 쿠팡 카테고리들에 똑같이 나누고 나머지는 네이버 등에.
-    풀 크기 비례로 뽑으면 20만 건인 네이버가 거의 전부를 차지하고, 쿠팡 안에서도 많이 모인 카테고리만 나온다.
+    """출처별 뽑을 비율. 카테고리 몫(coupang_share)을 카테고리(AI Hub·쿠팡)들에 똑같이 나누고 나머지는 네이버 등에.
+    풀 크기 비례로 뽑으면 큰 출처가 거의 전부를 차지하고, 그 안에서도 많이 모인 카테고리만 나온다.
     단, 한 출처의 AI 수가 그 출처 사람 리뷰의 cap(50%)을 넘지 않게 한다: 넘으면 prepare 단계에서 같은 출처 사람 리뷰로
     짝을 못 맞춰 "그 카테고리 = AI"라는 지름길이 생긴다. 넘친 몫은 여유 있는 다른 카테고리 → 네이버 순으로 넘긴다."""
     by_src = defaultdict(list)
     for r in pool:
         by_src[source_of(r)].append(r)
-    cp = [k for k in by_src if k.startswith("coupang:")]
-    other = [k for k in by_src if not k.startswith("coupang:")]
+    cp = [k for k in by_src if ":" in k]          # 카테고리 칸
+    other = [k for k in by_src if ":" not in k]   # 카테고리 없는 출처(네이버)
     if not cp or not other:
         share = {k: 1 / len(by_src) for k in by_src}
     else:
@@ -198,9 +198,9 @@ def cmd_make(args):
             w = csv.DictWriter(f, fieldnames=COLUMNS)
             w.writeheader()
             w.writerows(rows)
-        cats = Counter(r["category"] for r in rows if r["platform"] == "coupang")
+        cats = Counter(r["category"] for r in rows if r["category"])
         print(f"  → {path}: {len(rows)}건 · 유형 {dict(Counter(r['prompt_type'] for r in rows))} · 플랫폼 {dict(Counter(r['platform'] for r in rows))}"
-              + (f"\n     쿠팡 카테고리 {dict(cats)}" if cats else ""))
+              + (f"\n     카테고리 {len(cats)}개: {dict(cats.most_common(12))}" if cats else ""))
 
 
 def cmd_merge(args):
@@ -243,11 +243,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     m = sub.add_parser("make", help="작업표 만들기")
-    m.add_argument("--human", nargs="+", default=sorted(glob.glob(os.path.join(ROOT, "data", "raw", "*_human.jsonl"))))
+    merged = os.path.join(ROOT, "data", "raw", "human_reviews.jsonl")  # convert_sources.py가 만든 합본
+    m.add_argument("--human", nargs="+",
+                   default=[merged] if os.path.exists(merged) else sorted(glob.glob(os.path.join(ROOT, "data", "raw", "*_human.jsonl"))))
     m.add_argument("--generators", nargs="+", default=["chatgpt", "claude", "gemini"])
     m.add_argument("--n", type=int, default=300, help="생성 모델마다 만들 작업 수")
-    m.add_argument("--coupang-share", type=float, default=0.5,
-                   help="기준 리뷰 중 쿠팡 몫(쿠팡 카테고리마다 똑같이 나눔). 나머지는 네이버. 쿠팡 데이터가 없으면 무시")
+    m.add_argument("--category-share", "--coupang-share", dest="coupang_share", type=float, default=0.5,
+                   help="기준 리뷰 중 카테고리 있는 출처(AI Hub·쿠팡)의 몫, 카테고리마다 똑같이 나눔. 나머지는 네이버")
     m.add_argument("--batch", default="", help="추가 묶음 이름(예: b2) → tasks_<모델>_b2.csv. 이전 묶음의 기준 리뷰는 피함")
     m.add_argument("--force", action="store_true", help="답을 채운 작업표도 덮어씀(주의)")
     m.add_argument("--seed", type=int, default=42)

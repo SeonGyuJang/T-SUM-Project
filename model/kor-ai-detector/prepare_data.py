@@ -302,6 +302,8 @@ SHORTCUT_FEATURES = {
     "마침표 비율": lambda t: t.count(".") / max(1, len(t)),
     "이모지 수": lambda t: len(EMOJI.findall(t)),
     "ㅋ·ㅎ·ㅠ 수": lambda t: sum(t.count(c) for c in "ㅋㅎㅠㅜ"),
+    "연속 공백 수": lambda t: len(re.findall(r" {2,}", t)),
+    "가림 표시(OO·**·XXX)": lambda t: len(re.findall(r"\*{2,}|O{2,}|X{3,}|0{2,}(?=쇼핑|몰)", t)),
 }
 
 

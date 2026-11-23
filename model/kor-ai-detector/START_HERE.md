@@ -1,6 +1,10 @@
 # 지금 할 일 (순서대로)
 
-현재 상태: 네이버 ✅ 준비됨 · LGC ✅ 받음(**AI 댓글 2,000건뿐 → 1단계 학습 생략**) · 쿠팡 ⏳ 수집 중 · AI 리뷰 ⬜ 시작 전
+현재 상태: 사람 = AI Hub 속성기반 감정분석 ✅(약 25만) + 네이버 ✅(20만) · LGC ✅ 받음(**AI 댓글 2,000건뿐 → 테스트 전용**) · 쿠팡 ✖ 중단 · AI 리뷰 ⬜ 시작 전
+
+> **AI 리뷰가 없으면 아직 학습을 시작할 수 없습니다.** 학습은 사람 리뷰와 AI 리뷰를 구분하는 법을 배우는 것이라 양쪽이 다 있어야 합니다.
+> 지금 있는 AI 글은 LGC 뉴스 댓글 2,000건뿐인데, 이걸로 학습하면 모델은 'AI 말투'가 아니라 '리뷰 vs 뉴스 댓글'을 구분하게 됩니다.
+> 학습은 몇 분이면 끝나니, AI 리뷰가 모일 때마다 **처음부터 다시 학습**하면 됩니다(이어 학습보다 깔끔).
 
 ```
 [A] 설치 ─► [B] LGC 받기(끝) ─► XDAC-D 기준선(선택)
@@ -26,7 +30,7 @@ cd model/kor-ai-detector
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python tests/smoke_test.py                            # "모든 점검 통과"가 나오면 OK
-python convert_sources.py                             # 네이버(+쿠팡) → data/raw/*_human.jsonl
+python convert_sources.py                             # AI Hub + 네이버 → data/raw/human_reviews.jsonl (파일 하나)
 ```
 
 ## [B] LGC 받기 — ✅ 끝남
@@ -41,16 +45,17 @@ python convert_sources.py                             # 네이버(+쿠팡) → d
 ## [D] AI 리뷰 수집 — **팀이 할 일, 지금 가장 중요** (이게 있어야 학습 가능)
 
 ```bash
-python convert_sources.py                                          # 최신 쿠팡 수집분 반영 (make 전에 항상)
+python convert_sources.py                                          # 사람 리뷰 합본 최신화 (make 전에 한 번)
 python make_ai_tasks.py make --n 1000 --generators chatgpt claude gemini
 # → data/ai_tasks/tasks_chatgpt.csv · tasks_claude.csv · tasks_gemini.csv  (--n 은 생성 모델마다의 건수)
 ```
-**어떤 리뷰를 기준으로 만드나?** `make`를 실행하는 순간 `data/raw/*_human.jsonl`에 있는 리뷰에서 고릅니다(그 뒤에 모은 리뷰는 이미 만든 작업표에 반영되지 않음).
-- 기준 리뷰의 **50%는 쿠팡**(`--coupang-share`), 쿠팡 몫은 **카테고리마다 똑같이** 나눕니다. 나머지는 네이버.
+**어떤 리뷰를 기준으로 만드나?** `make`를 실행하는 순간 `data/raw/human_reviews.jsonl`에 있는 리뷰에서 고릅니다(그 뒤에 넣은 리뷰는 이미 만든 작업표에 반영되지 않음).
+- 기준 리뷰의 **50%는 AI Hub**(`--category-share`), AI Hub 몫은 **카테고리(패션 > 여성의류 등)마다 똑같이** 나눕니다. 나머지는 네이버.
+  AI Hub는 상품명이 있어 '이 상품 리뷰를 써 줘' 프롬프트가 자연스럽고, 같은 상품의 다른 리뷰를 말투 예시로 씁니다(상품명의 OO·** 가림 표시는 뺌).
 - 한 카테고리의 AI 수는 그 카테고리 사람 리뷰의 절반을 넘지 않게 자동으로 줄입니다(넘으면 "그 카테고리 = AI" 지름길이 생김). 줄인 몫은 다른 카테고리 → 네이버로 갑니다.
-- 쿠팡 카테고리를 더 모은 뒤에는 **추가 묶음**으로 만드세요. 채우던 작업표는 그대로 두고, 이미 쓴 기준 리뷰는 피합니다:
+- 더 만들 때는 **추가 묶음**으로 만드세요. 채우던 작업표는 그대로 두고, 이미 쓴 기준 리뷰는 피합니다:
   ```bash
-  python convert_sources.py && python make_ai_tasks.py make --batch b2 --n 500 --generators chatgpt claude gemini
+  python make_ai_tasks.py make --batch b2 --n 500 --generators chatgpt claude gemini
   # → tasks_chatgpt_b2.csv …   (답을 채운 작업표는 실수로 덮어쓰지 않도록 막혀 있음)
   ```
 1. CSV를 엑셀·구글 시트로 엽니다. 행마다 `prompt` 칸을 해당 서비스(ChatGPT·Claude·Gemini)의 **새 대화**에 붙여 넣습니다.
@@ -75,16 +80,16 @@ python make_ai_tasks.py make --n 1000 --generators chatgpt claude gemini
 python prepare_data.py \
   --lgc ../data/raw/XDAC_obs/LGC_data/LGC_data_v1.0.json \
   --lgc-all-ai --lgc-text-field generated_comment --lgc-generator-field llm_model_family \
-  --human-reviews data/raw/naver_human.jsonl data/raw/coupang_human.jsonl \
+  --human-reviews data/raw/human_reviews.jsonl \
   --ai-reviews data/raw/ai_chatgpt.jsonl data/raw/ai_claude.jsonl data/raw/ai_gemini.jsonl \
   --human-before 2022-12-01 --holdout-generators gemini --out data/processed
 ```
 - LGC는 `lgc_ai_test.jsonl`(테스트 전용)로만 나옵니다. `stage1_*` 파일은 만들어지지 않는 게 정상입니다.
-- 사람 리뷰(20만)는 AI 수 × 1(`--human-ratio`)로 **별점·길이를 맞춰** 자동으로 줄입니다.
 - 네이버엔 줄바꿈이 없어서, AI 쪽에만 줄바꿈이 있으면 양쪽 줄바꿈을 공백으로 바꿉니다(`--newlines auto`, 이유가 출력됨).
 - **마지막 [지름길 점검]을 꼭 보세요.** ⚠가 뜬 특징(길이·마침표 등)이 있으면 모델이 AI다움이 아니라 그 차이로 구분합니다 → [D]의 생성 방식을 고친 뒤 다시.
-- 쿠팡 사람 리뷰도 넣으세요: `--human-reviews data/raw/naver_human.jsonl data/raw/coupang_human.jsonl`. 사람 리뷰는 AI와 **같은 플랫폼·카테고리**에서 짝을 맞춰 뽑습니다.
-- 플랫폼 교차 테스트를 하려면 `--test-only-platforms coupang`. 이때 쿠팡 기준 AI 리뷰(약 절반)도 학습에서 빠지고 테스트로만 갑니다 → 학습량이 줄어드니 확인용으로 한 번 돌리고, 최종 모델은 빼고 학습하세요.
+- 사람 리뷰(45만)는 AI와 **같은 출처·카테고리·별점·길이**에서 짝을 맞춰 AI 수만큼 뽑습니다(AI가 '패션 > 여성의류'를 보고 썼으면 사람도 거기서).
+- [지름길 점검]에 '연속 공백 수'·'가림 표시(OO·**)'도 봅니다. AI Hub 본문엔 띄어쓰기 두 번·비식별 가림이 꽤 있어서 AI 쪽과 크게 다르면 ⚠가 뜹니다.
+- 플랫폼 교차 테스트(선택): `--test-only-platforms naver` → 네이버는 학습에 안 쓰고 AI Hub로만 학습한 모델이 네이버에서도 되는지 봅니다(그만큼 학습량이 줄어드니 확인용으로만).
 
 ## [F] 학습 (리뷰)
 
@@ -132,4 +137,4 @@ python export_for_service.py --model models/stage2 --report reports/stage2/repor
 ---
 
 ### 결과물은 git에 올라가지 않습니다
-`model/data/`(네이버·쿠팡·LGC·XDAC 원천 데이터), `data/`, `models/`, `reports/`는 `.gitignore`에 들어 있습니다(리뷰 원문·대용량 가중치).
+`model/data/`(AI Hub·네이버·LGC·XDAC 원천 데이터), `data/`, `models/`, `reports/`는 `.gitignore`에 들어 있습니다(리뷰 원문·대용량 가중치).

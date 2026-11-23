@@ -19,7 +19,7 @@
         │
         ▼  (1단계 LGC 댓글 학습은 생략 — 아래 ※)
         │
-        ▼  리뷰 파인튜닝: 네이버/쿠팡 사람 리뷰 + 팀 생성 AI 리뷰
+        ▼  리뷰 파인튜닝: AI Hub·네이버 사람 리뷰 + 팀 생성 AI 리뷰
 [리뷰 탐지 모델]  → 최종 모델
         │
         ▼  평가: 검증셋에서 임계값 결정 → 여러 테스트셋에서 성능 확인
@@ -54,7 +54,7 @@ kor-ai-detector/
 ├── README.md / START_HERE.md
 ├── requirements.txt
 ├── download_lgc.py        LGC(XDAC_obs) 내려받기 + 필드·라벨 값 확인
-├── convert_sources.py     저장소의 네이버·쿠팡 사람 리뷰 → 공통 형식(data/raw/*_human.jsonl)
+├── convert_sources.py     AI Hub·네이버(·쿠팡) 사람 리뷰 → 공통 형식 파일 하나(data/raw/human_reviews.jsonl)
 ├── make_ai_tasks.py       AI 리뷰 수작업 수집용 작업표 만들기 / 채운 작업표 합치기(data/raw/ai_*.jsonl)
 ├── prepare_data.py        데이터 통합·정제·균형 맞추기·분할 (1단계/2단계 데이터 생성)
 ├── train.py               파인튜닝 (1단계·2단계 공용)
@@ -88,8 +88,9 @@ python tests/smoke_test.py      # 데이터 처리·평가 로직 점검 (GPU·�
 | 데이터 | 상태 | 라벨 | 쓰임 |
 |---|---|---|---|
 | LGC 뉴스 댓글 | 받음 (공개 샘플) | **AI만 2,000건** (8개 모델군) | 추가 테스트 `lgc_ai_test.jsonl` (학습엔 안 씀) |
-| 네이버 쇼핑 리뷰 | 준비됨 | 사람 | 2단계 학습·검증·테스트 |
-| 쿠팡 리뷰 | 수집 중 | 사람 | 처음엔 **플랫폼 교차 테스트 전용**, 이후 학습에 합류 |
+| AI Hub 속성기반 감정분석 (쇼핑몰 리뷰) | 준비됨 (약 25만) | 사람 | 학습·검증·테스트, AI 리뷰 생성의 기준(상품명·카테고리 있음) |
+| 네이버 쇼핑 리뷰 | 준비됨 (20만) | 사람 | 학습·검증·테스트 |
+| 쿠팡 리뷰 | 중단 (수집 어려움) | 사람 | 모인 만큼만 선택적으로 (`convert_sources.py --no-coupang`으로 뺄 수 있음) |
 | 팀 생성 AI 리뷰 | 생성 예정 | AI | 2단계 학습·검증·테스트 (ChatGPT, Claude, Gemini) |
 
 ### 4.2 LGC 데이터 필드 확인
@@ -172,14 +173,14 @@ pprint(dataset_LGC[0]); pprint(dataset_LGC[-1])
 python prepare_data.py \
   --lgc ../data/raw/XDAC_obs/LGC_data/LGC_data_v1.0.json \
   --lgc-all-ai --lgc-text-field generated_comment --lgc-generator-field llm_model_family \
-  --human-reviews data/raw/naver_human.jsonl \
+  --human-reviews data/raw/human_reviews.jsonl \
   --ai-reviews data/raw/ai_chatgpt.jsonl data/raw/ai_claude.jsonl data/raw/ai_gemini.jsonl \
   --human-before 2022-12-01 \
   --holdout-generators gemini \
   --out data/processed
 ```
 
-쿠팡 데이터가 준비되면 `--human-reviews`에 추가하고 `--test-only-platforms coupang`을 붙여 플랫폼 교차 테스트부터 합니다.
+플랫폼 교차 테스트를 하려면 `--test-only-platforms naver`(AI Hub로만 학습 → 네이버에서 확인)처럼 한 출처를 테스트 전용으로 뺍니다.
 
 **처리 내용**
 1. 형식 통일 (`id, text, label, domain, platform, generator, group` + 부가 필드)
@@ -198,7 +199,7 @@ python prepare_data.py \
 | `stage2_test_xplatform.jsonl` | 테스트 전용 플랫폼(예: 쿠팡)의 전체 리뷰 |
 | `data_summary.json` | split별 건수, 생성 모델·플랫폼 분포, 길이 중앙값, 정제 통계 |
 
-**균형 맞추기 (`--human-ratio`, 기본 1.0)**: 네이버처럼 사람 리뷰(20만)가 AI 리뷰보다 훨씬 많으면 그대로 학습할 때 모델이 '전부 사람'으로 기웁니다. 사람 리뷰를 'AI 리뷰 수 × 이 값'으로 줄이되, **플랫폼·카테고리·별점·길이 구간 분포를 AI 쪽에 맞춰** 뽑습니다(AI가 쿠팡 건강식품 리뷰를 기준으로 만들어졌으면 사람도 쿠팡 건강식품에서). 칸이 모자라면 카테고리, 그다음 플랫폼을 빼고 채웁니다. `0`이면 줄이지 않습니다.
+**균형 맞추기 (`--human-ratio`, 기본 1.0)**: 네이버처럼 사람 리뷰(20만)가 AI 리뷰보다 훨씬 많으면 그대로 학습할 때 모델이 '전부 사람'으로 기웁니다. 사람 리뷰를 'AI 리뷰 수 × 이 값'으로 줄이되, **플랫폼·카테고리·별점·길이 구간 분포를 AI 쪽에 맞춰** 뽑습니다(AI가 AI Hub '패션 > 여성의류' 리뷰를 기준으로 만들어졌으면 사람도 거기서). 칸이 모자라면 카테고리, 그다음 플랫폼을 빼고 채웁니다. `0`이면 줄이지 않습니다.
 
 **지름길 점검**: 실행 마지막에 글자 수·줄바꿈·느낌표·마침표·이모지·ㅋㅎㅠ 각각 하나만으로 사람/AI를 가른 AUROC를 출력합니다. 0.7 이상(또는 0.3 이하)이면 경고가 뜹니다. 이 경우 모델 학습 전에 AI 리뷰의 생성 조건(길이·형식)부터 다시 맞추세요.
 
@@ -256,7 +257,7 @@ python train.py \
 2. **XDAC-D 기준선**을 같은 테스트셋에 돌려 비교 (`xdac_baseline.py`)
 3. **leave-one-generator-out 3회**: `--holdout-generators`를 `chatgpt`, `claude`, `gemini`로 바꿔 가며 prepare → 2단계 학습 → 평가
 4. **최종 모델**: holdout 없이 3개 모델군 전부로 2단계 학습
-5. **쿠팡 합류 전후 비교**: 쿠팡 교차 테스트 성능을 확인한 뒤 학습에 추가해 재학습
+5. **출처 교차 확인**: `--test-only-platforms naver`로 AI Hub로만 학습한 모델이 네이버에서도 되는지 확인
 
 ---
 
@@ -300,7 +301,7 @@ python evaluate.py --model models/stage2 \
 
 세부 표는 세 가지로 나뉩니다.
 - **생성 모델별**: AI 행은 `tpr`(탐지율), `human` 행은 `fpr`(오탐률)을 봅니다. 특정 모델만 낮으면 그 모델의 생성 다양성을 늘리세요.
-- **플랫폼별**: 네이버만 높고 쿠팡이 낮으면 플랫폼 서식이 지름길로 쓰였을 가능성이 큽니다.
+- **플랫폼별**: 한 출처(예: AI Hub)만 높고 다른 출처가 낮으면 플랫폼 서식이 지름길로 쓰였을 가능성이 큽니다.
 - **길이 구간별**: 20자 미만은 원래 어렵습니다. 짧은 리뷰는 판단 보류로 돌리는 정책도 고려하세요.
 
 ### 6.4 테스트셋별로 확인할 질문

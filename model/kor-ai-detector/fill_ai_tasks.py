@@ -354,6 +354,9 @@ def main():
     try:
         text, served_model, note = call_with_retry(caller, model0, rows[first]["prompt"], tag=rows[first]["task_id"])
     except Fatal as e:
+        if "(404)" in str(e) or "NOT_FOUND" in str(e):
+            sys.exit(f"  ✗ 첫 요청 실패: {e}\n→ 키는 정상이에요. 모델 {model0} 을(를) 이 계정에서 쓸 수 없어요(이름이 틀렸거나, 신규 사용자에게 막힌 모델).\n"
+                     f"  --models 에서 이 모델을 빼거나 다른 모델로 바꿔 다시 실행하세요. 이미 채운 행은 그대로 남아요.")
         sys.exit(f"  ✗ 첫 요청 실패: {e}\n{hint(provider)}")
     except KeyboardInterrupt:
         sys.exit("\n중단했어요.")

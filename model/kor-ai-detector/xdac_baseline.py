@@ -44,14 +44,24 @@ def main():
     ap.add_argument("--score-key", help="결과 1건에서 P(AI) 값까지의 점(.) 경로")
     ap.add_argument("--invert", action="store_true", help="값이 사람일 확률이면 1-값으로 뒤집기")
     ap.add_argument("--batch-size", type=int, default=64)
-    ap.add_argument("--device", default="cuda")
+    ap.add_argument("--device", default="auto", help="auto(기본) | cuda | cpu")
     ap.add_argument("--out", default="reports/xdac_scores.csv")
     args = ap.parse_args()
 
-    sys.path.insert(0, os.path.dirname(os.path.abspath(args.xdac_root)))
-    from XDAC_obs.xdac_encrypted import AIUnifiedEngine, get_xdac_path  # noqa: E402
+    import importlib.util
 
-    root = get_xdac_path()
+    mod_path = os.path.join(os.path.abspath(args.xdac_root), "xdac_encrypted.py")
+    if not os.path.exists(mod_path):
+        sys.exit(f"{mod_path} 가 없습니다. 먼저 `python download_lgc.py` 로 XDAC_obs를 내려받으세요.")
+    spec = importlib.util.spec_from_file_location("xdac_encrypted", mod_path)
+    xdac = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(xdac)
+    AIUnifiedEngine = xdac.AIUnifiedEngine
+    # 모델 카드 예시는 get_xdac_path()로 경로를 얻는다. 폴더 이름이 달라도 동작하도록 --xdac-root를 우선 사용
+    root = os.path.abspath(args.xdac_root) if os.path.isdir(os.path.join(args.xdac_root, "XDAC-D")) else xdac.get_xdac_path()
+    if args.device == "auto":
+        import torch
+        args.device = "cuda" if torch.cuda.is_available() else "cpu"
     engine = AIUnifiedEngine(
         detection_model_path=os.path.join(root, "XDAC-D"),
         attribution_model_path=os.path.join(root, "XDAC-A"),

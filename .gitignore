@@ -5,7 +5,7 @@
 .browser_profile/
 **/.browser_profile/
 # 병렬 수집 작업자별 프로필 사본 (collect_training_data.py --workers)
-.browser_profile_w*/
+.browser_profile*/
 # 서비스용 수집기 결과: output/products/*.json, all_products.json, failed.txt, raw/debug/ (crawler_last.log, search_last.html 포함)
 output/
 # 이전 수집 시험(spike) 결과 HTML·리포트
@@ -13,6 +13,11 @@ var/
 # 학습용 데이터 수집기 결과·상태·디버그 화면 (collect_training_data.py → model/data/raw/, model/data/debug/)
 model/data/
 model/artifacts/
+# kor-ai-detector 학습 파이프라인 산출물 (리뷰 원문·대용량 가중치·내려받은 XDAC)
+model/kor-ai-detector/data/
+model/kor-ai-detector/models/
+model/kor-ai-detector/reports/
+model/kor-ai-detector/XDAC_obs/
 # 혹시 다른 위치에 생긴 수집 결과
 coupang_training.json
 *.json.tmp

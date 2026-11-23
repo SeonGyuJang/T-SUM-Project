@@ -20,7 +20,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from metrics import binary_report, breakdown, length_bucket, threshold_at_fpr  # noqa: E402
+from metrics import binary_report, breakdown, length_bucket  # noqa: E402
+from predictor import MIN_CHARS, thresholds_from_val, verdict  # noqa: E402
 
 
 def load_jsonl(path):
@@ -29,25 +30,14 @@ def load_jsonl(path):
 
 
 class ModelScorer:
+    """학습된 모델 점수. 전처리·장치 선택(CUDA/MPS/CPU)은 predictor.Predictor와 같다."""
+
     def __init__(self, model_dir, max_len, batch_size, device=None):
-        import torch
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
-        self.torch = torch
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.tok = AutoTokenizer.from_pretrained(model_dir)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_dir).to(self.device).eval()
-        self.max_len, self.bs = max_len, batch_size
+        from predictor import Predictor
+        self.p = Predictor(model_dir, max_len=max_len, batch_size=batch_size, device=device)
 
     def __call__(self, records):
-        scores = []
-        texts = [r["text"] for r in records]
-        for i in range(0, len(texts), self.bs):
-            enc = self.tok(texts[i:i + self.bs], truncation=True, max_length=self.max_len,
-                           padding=True, return_tensors="pt").to(self.device)
-            with self.torch.no_grad():
-                p = self.torch.softmax(self.model(**enc).logits.float(), dim=-1)[:, 1]
-            scores.extend(p.cpu().tolist())
-        return scores
+        return self.p.score([r["text"] for r in records])
 
 
 class CsvScorer:
@@ -81,8 +71,8 @@ def main():
     ap.add_argument("--val", required=True, help="임계값을 정할 검증셋")
     ap.add_argument("--test", nargs="+", required=True)
     ap.add_argument("--target-fpr", type=float, default=0.01)
-    ap.add_argument("--uncertain-band", default="0.4,0.7",
-                    help="'판단 보류'로 볼 P(AI) 구간 (보고용)")
+    ap.add_argument("--ai-miss", type=float, default=0.05,
+                    help="검증셋 AI 리뷰 중 '사람'으로 내보내도 되는 비율. T_HUMAN을 정한다 (그 사이는 판단 보류)")
     ap.add_argument("--max-len", type=int, default=256)
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--out", default="reports/eval")
@@ -93,23 +83,34 @@ def main():
 
     val = load_jsonl(args.val)
     val_scores = scorer(val)
-    thr = threshold_at_fpr([s for s, r in zip(val_scores, val) if r["label"] == 0], args.target_fpr)
-    lo, hi = (float(x) for x in args.uncertain_band.split(","))
+    if not any(r["label"] == 0 for r in val):
+        sys.exit("검증셋에 사람(label=0) 리뷰가 없어 임계값을 정할 수 없습니다.")
+    thr, t_human = thresholds_from_val([r["label"] for r in val], val_scores, args.target_fpr, args.ai_miss)
     val_rep = binary_report([r["label"] for r in val], val_scores, thr)
+
+    def verdicts(recs, scores):
+        return [verdict(s, thr, t_human, len(r["text"])) for r, s in zip(recs, scores)]
 
     md = [f"# 평가 결과", "",
           f"- 점수 출처: `{args.model or args.scores_csv}`",
-          f"- 임계값 (검증셋 사람 FPR {args.target_fpr:.0%} 기준): **{thr:.4f}**  → P(AI) > 임계값이면 AI",
+          f"- 임계값 T_AI (검증셋 사람 FPR {args.target_fpr:.0%} 기준): **{thr:.4f}**  → P(AI) > T_AI 이면 AI",
+          f"- 임계값 T_HUMAN (검증셋 AI 중 {args.ai_miss:.0%}만 아래): **{t_human:.4f}**  → P(AI) ≤ T_HUMAN 이면 사람, 그 사이는 판단 보류"
+          f" (글자 수 {MIN_CHARS}자 미만도 판단 보류)",
           f"- 검증셋: AUROC {fmt(val_rep['auroc'])}, TPR {fmt(val_rep['tpr'])}, FPR {fmt(val_rep['fpr'])}"]
-    report = {"threshold": thr, "target_fpr": args.target_fpr, "val": val_rep, "tests": {}}
+    report = {"threshold": thr, "thresholds": {"T_AI": thr, "T_HUMAN": t_human}, "target_fpr": args.target_fpr,
+              "ai_miss": args.ai_miss, "min_chars": MIN_CHARS, "val": val_rep, "tests": {}}
     main_cols = ["n", "n_human", "n_ai", "auroc", "tpr", "fpr", "precision", "f1"]
 
     for path in args.test:
         name = os.path.splitext(os.path.basename(path))[0]
         recs = load_jsonl(path)
+        if not recs:
+            print(f"  ⚠ {path}가 비어 있어 건너뜁니다.")
+            continue
         scores = scorer(recs)
         overall = binary_report([r["label"] for r in recs], scores, thr)
-        uncertain = sum(1 for s in scores if lo <= s <= hi) / len(scores)
+        vs = verdicts(recs, scores)
+        uncertain = vs.count("판단 보류") / len(vs)
         by_gen = breakdown(recs, scores, thr, lambda r: r.get("generator", "?"))
         by_plat = breakdown(recs, scores, thr, lambda r: r.get("platform", "?"))
         by_len = breakdown(recs, scores, thr, lambda r: length_bucket(r["text"]))
@@ -118,17 +119,17 @@ def main():
 
         md.append(f"\n## {name}")
         md.append(f"\nAUROC **{fmt(overall['auroc'])}** · TPR@FPR{args.target_fpr:g} **{fmt(overall['tpr'])}** · "
-                  f"실제 FPR {fmt(overall['fpr'])} · 판단 보류 구간({lo}~{hi}) 비율 {uncertain:.1%}")
+                  f"실제 FPR {fmt(overall['fpr'])} · 판단 보류 비율 {uncertain:.1%}")
         md.append(table("생성 모델별 (human 행 = 사람 리뷰 오탐률은 fpr 열)", by_gen, main_cols))
         md.append(table("플랫폼별", by_plat, main_cols))
         md.append(table("길이 구간별", by_len, main_cols))
 
         with open(os.path.join(args.out, f"pred_{name}.csv"), "w", encoding="utf-8", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["id", "label", "score", "pred", "generator", "platform", "text"])
-            for r, s in zip(recs, scores):
-                w.writerow([r["id"], r["label"], f"{s:.6f}", int(s > thr),
-                            r.get("generator", ""), r.get("platform", ""), r["text"]])
+            w.writerow(["id", "label", "score", "pred", "verdict", "generator", "platform", "prompt_type", "text"])
+            for r, s, v in zip(recs, scores, vs):
+                w.writerow([r["id"], r["label"], f"{s:.6f}", int(s > thr), v,
+                            r.get("generator", ""), r.get("platform", ""), r.get("prompt_type", ""), r["text"]])
 
     with open(os.path.join(args.out, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)

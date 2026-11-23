@@ -41,19 +41,25 @@
 
 ## 2. 파일 구성
 
+> **처음이면 [`START_HERE.md`](START_HERE.md)부터** — 지금 해야 할 일을 순서대로 정리했습니다.
+
 ```
 kor-ai-detector/
-├── README.md            ← 이 문서
+├── README.md / START_HERE.md
 ├── requirements.txt
-├── prepare_data.py      데이터 통합·정제·분할 (1단계/2단계 데이터 생성)
-├── train.py             파인튜닝 (1단계·2단계 공용)
-├── evaluate.py          임계값 결정 + 테스트셋 평가 리포트
-├── xdac_baseline.py     XDAC-D 기준선 점수 생성
-├── metrics.py           AUROC, FPR 기준 임계값 등 지표 함수
-└── tests/smoke_test.py  GPU 없이 도는 점검 스크립트
+├── download_lgc.py        LGC(XDAC_obs) 내려받기 + 필드·라벨 값 확인
+├── convert_sources.py     저장소의 네이버·쿠팡 사람 리뷰 → 공통 형식(data/raw/*_human.jsonl)
+├── make_ai_tasks.py       AI 리뷰 수작업 수집용 작업표 만들기 / 채운 작업표 합치기(data/raw/ai_*.jsonl)
+├── prepare_data.py        데이터 통합·정제·균형 맞추기·분할 (1단계/2단계 데이터 생성)
+├── train.py               파인튜닝 (1단계·2단계 공용)
+├── evaluate.py            임계값(T_AI·T_HUMAN) 결정 + 테스트셋 평가 리포트
+├── predictor.py           추론 공용 모듈 (evaluate·app·export가 같은 전처리·판정 규칙을 씀)
+├── app.py                 모델 점검용 웹페이지 (http://127.0.0.1:7860)
+├── export_for_service.py  학습한 모델 → 홈페이지(service) 아티팩트
+├── xdac_baseline.py       XDAC-D 기준선 점수 생성
+├── metrics.py             AUROC, FPR 기준 임계값 등 지표 함수
+└── tests/smoke_test.py    GPU 없이 도는 점검 스크립트
 ```
-
----
 
 ## 3. 환경 설정
 
@@ -63,7 +69,8 @@ pip install -r requirements.txt
 python tests/smoke_test.py      # 데이터 처리·평가 로직 점검 (GPU·모델 불필요)
 ```
 
-- 학습은 GPU 1장(예: 24GB 이상) 기준으로 설계했습니다. `--fp16`(또는 A100/H100이면 `--bf16`)을 켜세요.
+- 학습은 GPU 1장(예: 24GB 이상) 기준으로 설계했습니다. `--fp16`(또는 A100/H100이면 `--bf16`)을 켜세요. GPU가 없으면 두 옵션은 무시됩니다(맥은 Apple GPU(MPS)를 자동 사용).
+- transformers 4.x·5.x 모두 동작합니다(5.x에서 없어진 `warmup_ratio`는 내부에서 step 수로 바꿔 넘깁니다).
 - XDAC 기준선을 돌리려면 Hugging Face에 로그인하고 `keepsteady/XDAC_obs` 접근 승인을 받아야 합니다.
 
 ---
@@ -117,6 +124,7 @@ pprint(dataset_LGC[0]); pprint(dataset_LGC[-1])
 1. **2022년 12월 이전 리뷰 위주로 사용** (`--human-before 2022-12-01`). ChatGPT 공개 이후 리뷰에는 이미 AI가 쓴 글이 섞여 있을 수 있어 "사람" 라벨이 오염됩니다. 날짜가 없는 리뷰 수는 `human_no_date`로 보고됩니다.
 2. **개인정보 제거**: 이름, 전화번호, 주소, 주문번호 등은 수집 단계에서 마스킹하세요.
 3. **줄바꿈·연속 공백·반복 문자(ㅋㅋ, ㅎㅎ)는 지우지 않습니다.** XDAC 연구에서 사람과 AI를 가르는 핵심 신호였습니다. 스크립트도 유니코드 정규화와 보이지 않는 문자 제거만 합니다.
+   - **예외(자동):** 네이버 쇼핑 말뭉치는 원본에서 줄바꿈이 전부 지워져 있습니다. 사람 쪽에 줄바꿈이 없고 AI 쪽(복사해 온 답변)에만 있으면 모델이 "줄바꿈 = AI"를 배우므로, `--newlines auto`(기본)는 그런 경우에만 양쪽 줄바꿈을 공백으로 바꾸고 이유를 출력합니다. 쿠팡처럼 사람 리뷰에도 줄바꿈이 있으면 그대로 둡니다.
 4. 플랫폼이 자동으로 붙이는 문구(옵션명, "한 달 사용 후기" 태그, 추천 수 등)는 **본문에서 떼어내세요.** 남겨 두면 모델이 "네이버 서식 = 사람"이라는 지름길을 배웁니다.
 5. 데이터 수집 방식은 각 플랫폼 이용약관과 법적 검토를 거치세요.
 
@@ -183,7 +191,9 @@ python prepare_data.py \
 | `stage2_test_xplatform.jsonl` | 테스트 전용 플랫폼(예: 쿠팡)의 전체 리뷰 |
 | `data_summary.json` | split별 건수, 생성 모델·플랫폼 분포, 길이 중앙값, 정제 통계 |
 
-**지름길 점검**: 실행 마지막에 "글자 수만으로 사람/AI를 가른 AUROC"를 출력합니다. 0.7 이상(또는 0.3 이하)이면 경고가 뜹니다. 이 경우 모델 학습 전에 AI 리뷰의 길이 조건부터 다시 맞추세요.
+**균형 맞추기 (`--human-ratio`, 기본 1.0)**: 네이버처럼 사람 리뷰(20만)가 AI 리뷰보다 훨씬 많으면 그대로 학습할 때 모델이 '전부 사람'으로 기웁니다. 사람 리뷰를 'AI 리뷰 수 × 이 값'으로 줄이되, **별점·길이 구간 분포를 AI 쪽에 맞춰** 뽑습니다. `0`이면 줄이지 않습니다.
+
+**지름길 점검**: 실행 마지막에 글자 수·줄바꿈·느낌표·마침표·이모지·ㅋㅎㅠ 각각 하나만으로 사람/AI를 가른 AUROC를 출력합니다. 0.7 이상(또는 0.3 이하)이면 경고가 뜹니다. 이 경우 모델 학습 전에 AI 리뷰의 생성 조건(길이·형식)부터 다시 맞추세요.
 
 ---
 
@@ -259,9 +269,17 @@ python evaluate.py --model models/stage2 \
 결과물: `report.md`(사람이 읽는 표), `report.json`(전체 수치), `pred_<테스트셋>.csv`(건별 점수·판정·본문, 오답 분석용)
 
 ### 6.2 임계값을 정하는 방식
-- 임계값은 **검증셋의 사람 리뷰**로 정합니다. 사람 리뷰 중 1%만 AI로 오판되는 점수를 기준선으로 삼고, `P(AI)`가 그보다 크면 AI로 판정합니다.
+검증셋에서 임계값 두 개를 정해 `report.json`의 `thresholds`에 저장합니다.
+
+| 임계값 | 정하는 방법 | 판정 |
+|---|---|---|
+| `T_AI` | 검증셋 **사람** 리뷰 중 `--target-fpr`(1%)만 이 위로 올라가는 점수 | `P(AI) > T_AI` → **AI** |
+| `T_HUMAN` | 검증셋 **AI** 리뷰 중 `--ai-miss`(5%)만 이 아래로 내려가는 점수 | `P(AI) ≤ T_HUMAN` → **사람** |
+| (그 사이) | | **판단 보류** (사람 검수로) |
+
+- 20자 미만 리뷰는 정보가 적어 항상 판단 보류입니다.
 - 테스트셋을 보고 임계값을 고르지 않으므로, 테스트 결과를 실서비스 기대치로 볼 수 있습니다.
-- 기준을 바꾸려면 `--target-fpr 0.005`처럼 지정합니다.
+- 예전 방식(보류 구간 0.4~0.7 고정)은 임계값이 0.98처럼 높게 잡히면 P(AI)=0.8이 '사람', 0.5가 '보류'가 되는 모순이 있어 바꿨습니다.
 
 ### 6.3 지표 읽는 법
 
@@ -270,7 +288,7 @@ python evaluate.py --model models/stage2 \
 | **AUROC** | 임계값과 무관한 전반적 분리 능력 (0.5 = 무작위, 1.0 = 완벽) | 모델 간 비교용 |
 | **TPR @ FPR 1%** | 사람 오탐을 1%로 묶었을 때 잡아내는 AI 리뷰 비율 | **핵심 지표** |
 | 실제 FPR | 테스트셋에서 실제로 나온 사람 오탐률 | 1%보다 크게 높으면 검증셋과 테스트셋 분포가 다르다는 신호 |
-| 판단 보류 비율 | `P(AI)`가 0.4~0.7인 비율 | 사람 검수로 넘길 물량 추정 |
+| 판단 보류 비율 | `T_HUMAN < P(AI) ≤ T_AI` 이거나 20자 미만인 비율 | 사람 검수로 넘길 물량 추정 |
 
 세부 표는 세 가지로 나뉩니다.
 - **생성 모델별**: AI 행은 `tpr`(탐지율), `human` 행은 `fpr`(오탐률)을 봅니다. 특정 모델만 낮으면 그 모델의 생성 다양성을 늘리세요.
@@ -315,29 +333,25 @@ python evaluate.py --scores-csv reports/xdac_scores.csv \
 
 ### 7.1 추론 예시
 
+`predictor.py`가 학습 때와 같은 전처리(줄바꿈 처리 포함)와 6.2의 판정 규칙을 적용합니다.
+
 ```python
-import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from predictor import Predictor
 
-MODEL_DIR = "models/stage2"
-THRESHOLD = 0.0   # reports/stage2/report.md 의 임계값으로 교체
-UNCERTAIN = (0.4, 0.7)
-
-tok = AutoTokenizer.from_pretrained(MODEL_DIR)
-model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR).eval()
-
-def judge(text: str):
-    enc = tok(text, truncation=True, max_length=256, return_tensors="pt")
-    with torch.no_grad():
-        p_ai = torch.softmax(model(**enc).logits, dim=-1)[0, 1].item()
-    if UNCERTAIN[0] <= p_ai <= UNCERTAIN[1]:
-        verdict = "판단 보류"
-    else:
-        verdict = "AI" if p_ai > THRESHOLD else "사람"
-    return {"p_ai": round(p_ai, 4), "verdict": verdict}
-
-print(judge("배송 빠르고 포장도 꼼꼼해요 ㅎㅎ 재구매 의사 있습니다!"))
+pred = Predictor("models/stage2", report="reports/stage2/report.json")   # 임계값은 report.json에서
+print(pred.judge(["배송 빠르고 포장도 꼼꼼해요 ㅎㅎ 재구매 의사 있습니다!"]))
+# [{'text': '...', 'p_ai': 0.031, 'verdict': '사람', 'chars': 27}]
 ```
+
+**웹페이지로 확인**: `python app.py --model models/stage2 --report reports/stage2/report.json` → http://127.0.0.1:7860
+리뷰를 넣어 P(AI)·판정을 보고, 테스트셋에서 무작위로 뽑아 정답과 판정을 비교할 수 있습니다.
+
+**홈페이지(service)에 연결**:
+```bash
+python export_for_service.py --model models/stage2 --report reports/stage2/report.json --version det-ko-review-v1.0
+# service/.env → DETECTOR_MODE=inprocess, MODEL_ARTIFACT_PATH=../model/artifacts/det-ko-review-v1.0
+```
+홈페이지의 판정 P(AI)는 이 모델의 출력과 같습니다(검증함). service는 줄바꿈을 공백으로 바꿔 판정하므로 `--newlines space`로 준비한 데이터로 학습하면 완전히 같아집니다.
 
 ### 7.2 운영 원칙
 - 판정 결과는 **검수 우선순위를 정하는 신호**로 쓰고, 단독으로 제재 근거로 쓰지 않습니다.
@@ -361,22 +375,24 @@ print(judge("배송 빠르고 포장도 꼼꼼해요 ㅎㅎ 재구매 의사 있
 
 | 항목 | 상태 |
 |---|---|
-| 지표 함수 (AUROC, FPR 기준 임계값) | ✅ 통과 |
-| LGC 필드 매핑, 라벨 값 매핑, 중복 제거 | ✅ 통과 |
+| 지표 함수 (AUROC, FPR 기준 임계값), 임계값 2개와 판정 일관성 | ✅ 통과 |
+| LGC 필드 매핑, 라벨 값 매핑, 중복 제거, `--inspect-lgc` | ✅ 통과 |
 | 기사·상품 단위 분할 (split 간 그룹 겹침 없음) | ✅ 통과 |
 | holdout 생성 모델·테스트 전용 플랫폼 격리 | ✅ 통과 |
-| 날짜 필터, AI 메타 문구 정리, 거절 응답 제거 | ✅ 통과 |
-| 지름길(길이) 경고 | ✅ 통과 |
+| 날짜 필터, AI 메타 문구 정리, 거절 응답 제거, 줄바꿈 자동 처리 | ✅ 통과 |
+| 지름길 경고(길이·줄바꿈·문장부호 등) | ✅ 통과 |
+| `convert_sources.py`, `make_ai_tasks.py make/merge` | ✅ 통과 |
 | `evaluate.py --scores-csv` 리포트 생성 | ✅ 통과 |
-| `train.py`, `evaluate.py --model`, `xdac_baseline.py` | ⚠ 문법 검사만 통과. 실제 학습·추론은 아직 실행하지 않음 |
 
-GPU 환경에서 처음 돌릴 때는 아래 순서로 짧게 확인하세요.
+실제 실행 확인(CPU, 소형 모델 `monologg/koelectra-small-v3-discriminator`, 합성 LGC + 실제 네이버 리뷰 + 가짜 AI 리뷰):
 
-```bash
-python tests/smoke_test.py
-python train.py --model beomi/KcELECTRA-base-v2022 \
-  --train data/processed/stage1_train.jsonl --val data/processed/stage1_val.jsonl \
-  --out models/debug --epochs 1 --max-train-samples 2000 --max-val-samples 500
-python evaluate.py --model models/debug --val data/processed/stage2_val.jsonl \
-  --test data/processed/stage2_test.jsonl --out reports/debug
-```
+| 항목 | 상태 |
+|---|---|
+| `train.py` 1단계 → 2단계(replay 15%) 학습·저장 | ✅ 실행됨 (transformers 5.24에서 `warmup_ratio` 문제 수정 후) |
+| `evaluate.py --model` (임계값·리포트·pred CSV) | ✅ 실행됨 |
+| `export_for_service.py` → service 계약 테스트 2개 | ✅ 통과, service가 낸 P(AI)가 모델 출력과 같음 |
+| `app.py` 웹페이지 (데스크톱·모바일 브라우저) | ✅ 동작 |
+| `download_lgc.py`, `xdac_baseline.py` | ⚠ 접근 승인이 필요한 저장소라 여기서는 실행하지 못함 |
+| KcELECTRA-base로 실제 데이터 학습 | ⏳ GPU에서 진행할 일 (지금 수치는 가짜 데이터라 의미 없음) |
+
+GPU 환경에서 처음 돌릴 때는 [`START_HERE.md`](START_HERE.md)의 "짧은 시험 학습"부터 하세요.

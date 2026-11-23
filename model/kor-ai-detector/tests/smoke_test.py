@@ -147,14 +147,102 @@ def test_prepare_and_evaluate():
         print("✓ evaluate (--scores-csv, 임계값·세부 지표·리포트)")
 
 
+def test_thresholds_and_verdict():
+    from predictor import thresholds_from_val, verdict
+
+    labels = [0] * 200 + [1] * 200
+    scores = [i / 400 for i in range(200)] + [0.3 + i / 300 for i in range(200)]
+    t_ai, t_h = thresholds_from_val(labels, scores, 0.01, 0.05)
+    fp = sum(1 for s, y in zip(scores, labels) if y == 0 and s > t_ai)
+    miss = sum(1 for s, y in zip(scores, labels) if y == 1 and s <= t_h)
+    assert fp <= 2 and miss <= 10 and t_h <= t_ai, (t_ai, t_h, fp, miss)
+    # 판정은 점수 순서와 일관돼야 한다(예전 0.4~0.7 고정 보류 구간의 모순 방지)
+    order = {"사람": 0, "판단 보류": 1, "AI": 2}
+    vs = [verdict(p / 100, t_ai, t_h, 50) for p in range(101)]
+    assert all(order[a] <= order[b] for a, b in zip(vs, vs[1:])), vs
+    assert verdict(0.99, t_ai, t_h, 5) == "판단 보류"  # 20자 미만
+    print("✓ 임계값 2개(T_AI·T_HUMAN)와 판정 일관성")
+
+
+def test_newlines_auto():
+    with tempfile.TemporaryDirectory() as d:
+        human = [{"text": f"한줄짜리 사람 리뷰 {i} 좋아요", "product_id": f"p{i}", "platform": "naver", "date": "2020-01-01"}
+                 for i in range(200)]
+        ai = [{"text": f"첫 문단입니다 {i}.\n\n두 번째 문단이에요.", "product_id": f"p{i}", "generator": "claude"} for i in range(200)]
+        for name, rows in (("h.jsonl", human), ("a.jsonl", ai)):
+            with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+                f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+        out = os.path.join(d, "p")
+        stdout = run("prepare_data.py", "--human-reviews", os.path.join(d, "h.jsonl"), "--ai-reviews", os.path.join(d, "a.jsonl"),
+                     "--out", out)
+        rows = [r for k in ("train", "val", "test") for r in load(os.path.join(out, f"stage2_{k}.jsonl"))]
+        assert not any("\n" in r["text"] for r in rows) and "공백으로 바꿉니다" in stdout
+        assert json.load(open(os.path.join(out, "data_summary.json"), encoding="utf-8"))["cleaning_stats"]["newlines_mode"] == "space"
+        stdout = run("prepare_data.py", "--human-reviews", os.path.join(d, "h.jsonl"), "--ai-reviews", os.path.join(d, "a.jsonl"),
+                     "--newlines", "keep", "--out", out)
+        assert "줄바꿈 수" in stdout and "⚠ 줄바꿈 수" in stdout  # 유지하면 지름길 경고
+    print("✓ 줄바꿈 자동 처리(한쪽에만 있으면 공백으로) + 지름길 경고")
+
+
+def test_inspect_lgc():
+    with tempfile.TemporaryDirectory() as d:
+        make_raw(d)
+        out = run("prepare_data.py", "--lgc", os.path.join(d, "lgc.json"), "--inspect-lgc")
+        assert "필드: ['comment', 'type', 'model', 'article']" in out and "'LLM': 200" in out
+    print("✓ LGC 구조 확인(--inspect-lgc)")
+
+
+def test_convert_and_tasks():
+    with tempfile.TemporaryDirectory() as d:
+        nv = os.path.join(d, "naver.jsonl")
+        with open(nv, "w", encoding="utf-8") as f:
+            for i in range(50):
+                f.write(json.dumps({"review_id": f"nv-{i:04d}", "star": [1, 2, 4, 5][i % 4], "content": f"리뷰 내용 {i} 배송 좋아요"},
+                                   ensure_ascii=False) + "\n")
+        cp = os.path.join(d, "coupang.json")
+        json.dump({"products": {"777": {"name": "가짜 텀블러", "category": "주방", "reviews": [
+            {"review_id": "cp-777-1", "star": 3, "content": "본 리뷰는 쿠팡캐시를 지급받기 위해 작성한 것입니다. 보온 잘 돼요",
+             "created_at": "2021-03-01", "period": "pre_chatgpt", "product_name": "가짜 텀블러"},
+            {"review_id": "cp-777-2", "star": 5, "content": "최근 리뷰", "created_at": "2025-01-01", "period": "post_chatgpt"}]}}},
+            open(cp, "w", encoding="utf-8"), ensure_ascii=False)
+        raw = os.path.join(d, "raw")
+        run("convert_sources.py", "--naver", nv, "--coupang", cp, "--out", raw)
+        n, c = load(os.path.join(raw, "naver_human.jsonl")), load(os.path.join(raw, "coupang_human.jsonl"))
+        assert len(n) == 50 and n[0]["product_id"] == "nv-0000" and n[0]["date"] == "2020-07-31"
+        assert len(c) == 1 and c[0]["text"] == "보온 잘 돼요" and c[0]["product_id"] == "cp-777"
+        tasks = os.path.join(d, "tasks")
+        run("make_ai_tasks.py", "make", "--human", os.path.join(raw, "naver_human.jsonl"), os.path.join(raw, "coupang_human.jsonl"),
+            "--n", "12", "--generators", "chatgpt", "claude", "--out", tasks)
+        path = os.path.join(tasks, "tasks_claude.csv")
+        rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
+        assert len(rows) == 12 and all(r["prompt"] and r["product_id"] for r in rows)
+        assert {r["prompt_type"] for r in rows} <= {"scratch", "style", "rewrite"}
+        for i, r in enumerate(rows):  # 사람이 채운 것처럼
+            r["text"] = f"생성된 리뷰 {i}입니다" if i % 3 else ""
+            r["model_version"] = "claude-test"
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+        run("make_ai_tasks.py", "merge", path, "--out", raw)
+        ai = load(os.path.join(raw, "ai_claude.jsonl"))
+        assert len(ai) == 8 and all(r["generator"] == "claude" and r["product_id"] for r in ai)
+    print("✓ convert_sources(네이버·쿠팡 → 공통 형식) + make_ai_tasks(작업표 만들기·합치기)")
+
+
 def test_compile():
-    for f in ("train.py", "evaluate.py", "xdac_baseline.py", "prepare_data.py", "metrics.py"):
+    for f in ("train.py", "evaluate.py", "xdac_baseline.py", "prepare_data.py", "metrics.py", "predictor.py", "app.py",
+              "convert_sources.py", "make_ai_tasks.py", "export_for_service.py", "download_lgc.py"):
         py_compile.compile(os.path.join(ROOT, f), doraise=True)
     print("✓ 문법 검사 (train.py 등)")
 
 
 if __name__ == "__main__":
     test_metrics()
+    test_thresholds_and_verdict()
     test_compile()
+    test_inspect_lgc()
+    test_newlines_auto()
+    test_convert_and_tasks()
     test_prepare_and_evaluate()
     print("\n모든 점검 통과")

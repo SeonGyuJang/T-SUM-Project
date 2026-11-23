@@ -26,7 +26,7 @@ import unicodedata
 from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from metrics import auroc  # noqa: E402
+from metrics import auroc, length_bucket  # noqa: E402
 
 ZERO_WIDTH = re.compile("[​‌‍⁠﻿]")
 
@@ -126,6 +126,21 @@ def build_review_rows(paths, label, args, stats):
     return rows
 
 
+def inspect_lgc(path, n=3):
+    """LGC 파일 구조를 보여 줍니다: 필드 이름, 예시 레코드, 값 종류가 적은 필드(라벨 후보)의 분포."""
+    rows = read_any(path)
+    print(f"레코드 {len(rows):,}건 · 필드: {list(rows[0].keys())}")
+    for r in rows[:n] + rows[-1:]:
+        print(json.dumps({k: (str(v)[:80] if isinstance(v, str) else v) for k, v in r.items()}, ensure_ascii=False))
+    print("\n[값 종류가 20개 이하인 필드 = 라벨·생성 모델 후보]")
+    for k in rows[0]:
+        vals = Counter(str(r.get(k)) for r in rows[:200000])
+        if len(vals) <= 20:
+            print(f"  {k}: {dict(vals.most_common(20))}")
+    print("\n→ 본문 필드는 --lgc-text-field, 사람/AI 구분 필드는 --lgc-label-field, AI를 뜻하는 값은 --lgc-ai-values,"
+          " 생성 모델 필드는 --lgc-generator-field, 기사 ID 필드는 --lgc-group-field 로 지정하세요.")
+
+
 def build_lgc_rows(args, stats):
     ai_values = {v.strip().lower() for v in args.lgc_ai_values.split(",")}
     rows = []
@@ -176,6 +191,38 @@ def filter_and_dedupe(rows, args, stats, tag):
     return out
 
 
+def balance_humans(rows, ratio, rng, stats):
+    """사람 리뷰를 AI 리뷰 수 × ratio 로 줄인다. 별점·길이 구간 분포를 AI 쪽에 맞춰 뽑는다(README 4.5 분포 맞추기).
+    네이버처럼 사람 리뷰가 훨씬 많을 때 그대로 학습하면 모델이 '전부 사람'으로 기울기 때문."""
+    human = [r for r in rows if r["label"] == 0]
+    ai = [r for r in rows if r["label"] == 1]
+    target = int(len(ai) * ratio)
+    if not ai or ratio <= 0 or len(human) <= target:
+        return rows
+
+    def key(r):
+        return (str(r.get("rating") or ""), length_bucket(r["text"]))
+
+    pool = defaultdict(list)
+    for h in human:
+        pool[key(h)].append(h)
+    for v in pool.values():
+        rng.shuffle(v)
+    want = Counter(key(a) for a in ai)
+    picked, used = [], set()
+    for k, n in want.items():  # 칸마다 AI 수 × ratio 만큼
+        take = pool.get(k, [])[: int(round(n * ratio))]
+        picked += take
+        used.update(id(x) for x in take)
+    rest = [h for h in human if id(h) not in used]
+    rng.shuffle(rest)
+    picked += rest[: max(0, target - len(picked))]  # 칸이 모자라면 나머지에서 채움
+    stats["human_balanced_from"] = len(human)
+    stats["human_balanced_to"] = len(picked)
+    print(f"[균형 맞추기] 사람 리뷰 {len(human):,}건 → {len(picked):,}건 (AI {len(ai):,}건 × {ratio:g}, 별점·길이 분포를 AI에 맞춤)")
+    return picked + ai
+
+
 def group_split(rows, ratios, rng):
     """같은 group(상품/기사)이 여러 split에 걸치지 않게 나눕니다."""
     groups = sorted({r["group"] for r in rows})
@@ -215,19 +262,57 @@ def summarize(name, rows):
             "platforms": dict(plats), "median_len": med}
 
 
+EMOJI = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF]")
+SHORTCUT_FEATURES = {
+    "글자 수": lambda t: len(t),
+    "줄바꿈 수": lambda t: t.count("\n"),
+    "느낌표 비율": lambda t: t.count("!") / max(1, len(t)),
+    "마침표 비율": lambda t: t.count(".") / max(1, len(t)),
+    "이모지 수": lambda t: len(EMOJI.findall(t)),
+    "ㅋ·ㅎ·ㅠ 수": lambda t: sum(t.count(c) for c in "ㅋㅎㅠㅜ"),
+}
+
+
 def length_shortcut_check(rows):
-    """글자 수 하나만으로 사람/AI가 갈리면 데이터에 지름길이 있다는 신호입니다."""
+    """글자 수·줄바꿈·문장부호 같은 '겉모습' 하나만으로 사람/AI가 갈리면 데이터에 지름길이 있다는 신호입니다.
+    반환값: 글자 수 AUROC(이전 버전과 호환), 전체 결과는 summary['shortcut_auroc']에 저장."""
     labels = [r["label"] for r in rows]
-    a = auroc(labels, [len(r["text"]) for r in rows])
-    if a is None:
-        return None
-    strength = abs(a - 0.5) * 2  # 0 = 정보 없음, 1 = 길이만으로 완벽 분리
-    print(f"\n[지름길 점검] stage2_train에서 '글자 수'만으로 낸 AUROC = {a:.3f}")
-    if strength > 0.4:
-        print("  ⚠ 길이 분포 차이가 큽니다. AI 리뷰 생성 시 길이 조건을 사람 리뷰 분포에 맞추세요.")
+    print("\n[지름길 점검] stage2_train에서 특징 하나만으로 낸 AUROC (0.5 = 정보 없음, 0.7↑ 또는 0.3↓면 경고)")
+    result = {}
+    for name, fn in SHORTCUT_FEATURES.items():
+        a = auroc(labels, [fn(r["text"]) for r in rows])
+        if a is None:
+            continue
+        result[name] = round(a, 3)
+        warn = abs(a - 0.5) * 2 > 0.4
+        print(f"  {'⚠' if warn else '·'} {name:<10} {a:.3f}" + ("  ← 이 특징만으로 사람/AI가 갈립니다" if warn else ""))
+    if any(abs(a - 0.5) * 2 > 0.4 for a in result.values()):
+        print("  → 생성 조건(길이·형식)을 사람 리뷰 분포에 맞추거나 해당 표식을 정리한 뒤 학습하세요.")
     else:
-        print("  OK: 길이만으로는 잘 갈리지 않습니다.")
-    return a
+        print("  OK: 겉모습 특징 하나만으로는 잘 갈리지 않습니다.")
+    length_shortcut_check.result = result
+    return result.get("글자 수")
+
+
+def decide_newlines(mode, human, ai, stats):
+    """사람·AI 리뷰의 줄바꿈 사용률이 크게 다르면(예: 네이버 말뭉치는 줄바꿈이 전부 지워져 있음)
+    모델이 '줄바꿈 = AI' 지름길을 배웁니다. auto면 그런 경우에만 양쪽 줄바꿈을 공백으로 바꿉니다."""
+    def rate(rows):
+        return sum("\n" in r["text"] for r in rows) / len(rows) if rows else 0.0
+
+    hr, ar = rate(human), rate(ai)
+    stats["newline_rate_human"] = round(hr, 4)
+    stats["newline_rate_ai"] = round(ar, 4)
+    collapse = mode == "space" or (mode == "auto" and human and ai and abs(hr - ar) > 0.05 and min(hr, ar) < 0.02)
+    if mode == "auto":
+        print(f"[줄바꿈] 사람 리뷰 {hr:.1%} · AI 리뷰 {ar:.1%}에 줄바꿈이 있음 → "
+              + ("한쪽에만 있어 지름길이 되므로 양쪽 모두 공백으로 바꿉니다 (--newlines keep 으로 끌 수 있음)" if collapse
+                 else "비슷하므로 그대로 둡니다"))
+    if collapse:
+        for r in human + ai:
+            r["text"] = re.sub(r"[ \t]*\n+[ \t]*", " ", r["text"]).strip()
+    stats["newlines_mode"] = "space" if collapse else "keep"
+    return collapse
 
 
 def main():
@@ -239,6 +324,9 @@ def main():
                     help="라벨 필드에서 AI를 뜻하는 값들(쉼표 구분, 대소문자 무시). 나머지는 사람으로 처리")
     ap.add_argument("--lgc-generator-field", default=None, help="LGC에서 생성 모델명이 든 필드 (있으면)")
     ap.add_argument("--lgc-group-field", default=None, help="LGC에서 기사 ID 등 묶음 기준 필드 (있으면)")
+    ap.add_argument("--inspect-lgc", action="store_true", help="LGC 파일 구조(필드·라벨 값)만 출력하고 종료")
+    ap.add_argument("--newlines", choices=["auto", "keep", "space"], default="auto",
+                    help="리뷰 줄바꿈 처리. auto: 사람/AI 한쪽에만 줄바꿈이 있으면 양쪽 모두 공백으로(지름길 방지)")
     ap.add_argument("--human-reviews", nargs="*", default=[], help="사람 리뷰 파일들 (공통 형식)")
     ap.add_argument("--ai-reviews", nargs="*", default=[], help="AI 생성 리뷰 파일들 (공통 형식 + generator)")
     ap.add_argument("--review-text-field", default="text")
@@ -252,6 +340,8 @@ def main():
                     help="holdout 모델 리뷰를 학습 상품 것까지 모두 테스트에 사용 (기본: 테스트 상품 것만 사용해 누출 차단)")
     ap.add_argument("--test-only-platforms", default="",
                     help="쉼표 구분. 이 플랫폼 데이터는 학습에서 빼고 '플랫폼 교차' 테스트에만 사용 (예: coupang)")
+    ap.add_argument("--human-ratio", type=float, default=1.0,
+                    help="2단계에서 사람 리뷰를 'AI 리뷰 수 × 이 값'으로 줄임(별점·길이 맞춤). 0이면 줄이지 않음")
     ap.add_argument("--min-chars", type=int, default=5)
     ap.add_argument("--max-chars", type=int, default=2000)
     ap.add_argument("--stage1-ratios", default="0.9,0.05,0.05")
@@ -260,6 +350,11 @@ def main():
     ap.add_argument("--out", default="data/processed")
     args = ap.parse_args()
 
+    if args.inspect_lgc:
+        if not args.lgc:
+            ap.error("--inspect-lgc 에는 --lgc 파일이 필요합니다.")
+        inspect_lgc(args.lgc)
+        return
     if not args.lgc and not (args.human_reviews or args.ai_reviews):
         ap.error("--lgc 또는 --human-reviews/--ai-reviews 중 하나는 필요합니다.")
     os.makedirs(args.out, exist_ok=True)
@@ -282,6 +377,7 @@ def main():
     if args.human_reviews or args.ai_reviews:
         human = build_review_rows(args.human_reviews, 0, args, stats)
         ai = build_review_rows(args.ai_reviews, 1, args, stats)
+        decide_newlines(args.newlines, human, ai, stats)
         reviews = filter_and_dedupe(human + ai, args, stats, "review")
         holdout_gen = {g.strip().lower() for g in args.holdout_generators.split(",") if g.strip()}
         test_plat = {p.strip().lower() for p in args.test_only_platforms.split(",") if p.strip()}
@@ -290,6 +386,7 @@ def main():
         rest = [r for r in reviews if r["platform"] not in test_plat]
         unseen_ai = [r for r in rest if r["label"] == 1 and r["generator"] in holdout_gen]
         main_rows = [r for r in rest if not (r["label"] == 1 and r["generator"] in holdout_gen)]
+        main_rows = balance_humans(main_rows, args.human_ratio, rng, stats)
 
         ratios = [float(x) for x in args.stage2_ratios.split(",")]
         sp = group_split(main_rows, ratios, rng)
@@ -319,6 +416,7 @@ def main():
                 print(f"  ⚠ {name}에 한쪽 라벨만 있습니다. 사람/AI 리뷰가 모두 있어야 2단계 학습이 됩니다.")
         if outputs["stage2_train"]:
             summary["length_only_auroc"] = length_shortcut_check(outputs["stage2_train"])
+            summary["shortcut_auroc"] = getattr(length_shortcut_check, "result", {})
 
     print("\n[정제 통계]")
     for k, v in stats.items():

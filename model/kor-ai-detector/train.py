@@ -13,6 +13,7 @@
 """
 import argparse
 import json
+import math
 import os
 import random
 import sys
@@ -39,11 +40,33 @@ LABEL2ID = {"human": 0, "ai": 1}
 
 
 def load_jsonl(path, limit=None, rng=None):
+    """limit이 있으면 파일을 한 번 읽으면서 무작위 limit개만 남깁니다(저수지 표집).
+    LGC 학습셋(약 200만 건)을 replay용으로 일부만 쓸 때 전체를 메모리에 올리지 않기 위함."""
+    rng = rng or random.Random()
+    rows = []
     with open(path, encoding="utf-8") as f:
-        rows = [json.loads(line) for line in f if line.strip()]
-    if limit and len(rows) > limit:
-        rows = (rng or random).sample(rows, limit)
-    return [{"text": r["text"], "label": int(r["label"])} for r in rows]
+        for n, line in enumerate(x for x in f if x.strip()):
+            if not limit or len(rows) < limit:
+                rows.append(line)
+            else:
+                j = rng.randint(0, n)
+                if j < limit:
+                    rows[j] = line
+    out = []
+    for line in rows:
+        r = json.loads(line)
+        out.append({"text": r["text"], "label": int(r["label"])})
+    return out
+
+
+def data_preprocess_info(train_path):
+    """prepare_data.py가 남긴 전처리 설정(줄바꿈 처리 등). 추론 때 똑같이 적용해야 합니다."""
+    p = os.path.join(os.path.dirname(os.path.abspath(train_path)), "data_summary.json")
+    if not os.path.exists(p):
+        return {"newlines": "keep"}
+    with open(p, encoding="utf-8") as f:
+        stats = json.load(f).get("cleaning_stats", {})
+    return {"newlines": stats.get("newlines_mode", "keep")}
 
 
 def softmax_p1(logits):
@@ -124,6 +147,9 @@ def main():
     train_ds = Dataset.from_list(train_rows).map(tokenize, batched=True, remove_columns=["text"])
     val_ds = Dataset.from_list(val_rows).map(tokenize, batched=True, remove_columns=["text"])
 
+    # transformers 5.x에는 warmup_ratio가 없다 → 정수 warmup_steps로 계산해 넘긴다(4.x·5.x 모두 동작)
+    steps_per_epoch = math.ceil(len(train_rows) / (args.batch_size * args.grad_accum))
+    warmup_steps = int(math.ceil(steps_per_epoch * args.epochs * args.warmup_ratio))
     strategy = "steps" if args.eval_steps else "epoch"
     step_kwargs = {"eval_steps": args.eval_steps, "save_steps": args.eval_steps} if args.eval_steps else {}
     targs = TrainingArguments(
@@ -134,7 +160,7 @@ def main():
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size * 2,
         gradient_accumulation_steps=args.grad_accum,
-        warmup_ratio=args.warmup_ratio,
+        warmup_steps=warmup_steps,
         weight_decay=args.weight_decay,
         eval_strategy=strategy,
         save_strategy=strategy,
@@ -144,7 +170,7 @@ def main():
         greater_is_better=True,
         save_total_limit=2,
         fp16=args.fp16 and torch.cuda.is_available(),
-        bf16=args.bf16,
+        bf16=args.bf16 and torch.cuda.is_available(),  # bf16 학습은 CUDA GPU에서만
         report_to="none",
         seed=args.seed,
     )
@@ -165,8 +191,9 @@ def main():
     trainer.save_model(args.out)
     tok.save_pretrained(args.out)
     with open(os.path.join(args.out, "train_config.json"), "w", encoding="utf-8") as f:
-        json.dump({"args": vars(args), "val_metrics": metrics,
-                   "n_train": len(train_rows), "n_val": len(val_rows)}, f, ensure_ascii=False, indent=2)
+        json.dump({"args": vars(args), "val_metrics": metrics, "preprocess": data_preprocess_info(args.train),
+                   "max_len": args.max_len, "n_train": len(train_rows), "n_val": len(val_rows)},
+                  f, ensure_ascii=False, indent=2)
     print(f"저장 완료 → {args.out}")
 
 

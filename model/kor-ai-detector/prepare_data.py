@@ -36,7 +36,8 @@ AI_PREAMBLE = re.compile(
     re.IGNORECASE,
 )
 AI_LABEL_PREFIX = re.compile(r"^\s*(\*\*)?(리뷰|후기|상품\s*리뷰|Review)\s*(\d+)?\s*[:：](\*\*)?\s*", re.IGNORECASE)
-AI_REFUSAL = re.compile(r"(AI 언어 ?모델|인공지능 ?모델로서|죄송하지만[, ]+.*(작성|도와)|as an AI)", re.IGNORECASE)
+AI_REFUSAL = re.compile(r"(AI 언어 ?모델|인공지능 ?모델로서|죄송하지만[, ]+.*(작성|도와)|as an AI"
+                        r"|도와\s*드리기\s*(?:어렵|힘들)|가짜\s*리뷰|허위\s*(?:리뷰|후기)|전자상거래법|대신\s*다음과\s*같이)", re.IGNORECASE)
 
 
 def read_any(path):

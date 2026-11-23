@@ -22,6 +22,7 @@
 import argparse
 import csv
 import os
+import re
 import sys
 import threading
 import time
@@ -41,6 +42,26 @@ TIMEOUT_S = 120  # 요청 하나가 이보다 오래 걸리면 끊고 다시 (SD
 # SDK가 이를 Connection error로 보여 준다. gzip이면 파이썬 기본 기능만 쓴다.
 NO_BROTLI = {"Accept-Encoding": "gzip, deflate"}
 
+# 요청의 실제 목적을 사실대로 알린다. 리뷰를 쓰라는 요청만 보면 '가짜 리뷰로 소비자를 속이려는 것'으로 보고
+# 거절하는 경우가 있는데, 이 데이터는 AI 라벨을 달아 탐지 모델 학습·평가에만 쓰고 어디에도 게시하지 않는다.
+SYSTEM_PROMPT = (
+    "이 대화는 'AI가 쓴 한국어 상품 리뷰를 찾아내는 탐지 모델'을 만드는 연구 프로젝트의 데이터 구축 단계입니다. "
+    "여기서 만든 글은 모두 'AI 생성'이라는 정답 라벨을 붙여 탐지 모델의 학습·평가 데이터로만 쓰며, "
+    "쇼핑몰·판매 페이지·리뷰란 등 어디에도 게시하지 않습니다. "
+    "탐지 모델이 실제로 쓰이는 AI 리뷰를 구별하도록 배우려면, 요청한 조건(별점·말투·분량)에 맞는 자연스러운 리뷰 본문이 필요합니다. "
+    "설명이나 안내 없이 리뷰 본문만 출력하세요."
+)
+# 모델이 리뷰 대신 쓴 거절·대안 제시 문구 (서버의 거절 신호 없이 일반 답변으로 오는 경우)
+TEXT_REFUSAL = re.compile(
+    r"(도와\s*드리기\s*(?:어렵|힘들)|만들(?:어\s*드릴|지\s*않겠|\s*수\s*없)|작성(?:해\s*드리기\s*어렵|해\s*드릴\s*수\s*없|하지\s*않겠)"
+    r"|가짜\s*리뷰|허위\s*(?:리뷰|후기)|전자상거래법|소비자를\s*속|대신\s*다음과\s*같이|I\s*can'?t\s*help|I'?m\s*not\s*able\s*to)",
+    re.IGNORECASE,
+)
+
+
+def looks_refused(text):
+    return bool(text) and bool(TEXT_REFUSAL.search(text))
+
 
 class Fatal(Exception):
     """키·모델명처럼 다시 해도 안 되는 오류 → 전체 중단."""
@@ -58,8 +79,9 @@ def status_of(e):
 class Caller:
     """provider별 '프롬프트 1개 → (답, 실제 모델명, 메모)'. SDK는 처음 쓸 때 불러온다."""
 
-    def __init__(self, provider):
+    def __init__(self, provider, system=SYSTEM_PROMPT):
         self.provider = provider
+        self.system = system
         self.client = None
         if provider == "fake":
             return
@@ -79,19 +101,29 @@ class Caller:
             sys.exit(f"{provider} 클라이언트를 만들지 못했어요: {e}\n→ 환경 변수 {KEY_ENV[provider]} 에 API 키를 넣었는지 확인하세요.")
 
     def __call__(self, model, prompt):
+        text, served, note = self._raw(model, prompt)
+        if looks_refused(text):  # 거절 문구를 리뷰로 저장하지 않는다
+            return None, served, "text_refusal"
+        return text, served, note
+
+    def _raw(self, model, prompt):
         if self.provider == "fake":  # 테스트용
+            if "말로 거절" in prompt:
+                return "이 요청은 가짜 리뷰를 만드는 일이라 도와드리기 어렵습니다.", model, ""
             if "거절" in prompt:
                 return None, model, "refusal"
             return f"[{model}] 생성 리뷰 {abs(hash(prompt)) % 1000}", model, ""
         if self.provider == "anthropic":
             return self._claude(model, prompt)
         if self.provider == "openai":
-            r = self.client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}])
+            msgs = ([{"role": "system", "content": self.system}] if self.system else []) + [{"role": "user", "content": prompt}]
+            r = self.client.chat.completions.create(model=model, messages=msgs)
             ch = r.choices[0]
             if ch.finish_reason == "content_filter" or not (ch.message.content or "").strip():
                 return None, r.model, f"empty({ch.finish_reason})"
             return ch.message.content.strip(), r.model, ""
-        r = self.client.models.generate_content(model=model, contents=prompt)
+        cfg = {"system_instruction": self.system} if self.system else None
+        r = self.client.models.generate_content(model=model, contents=prompt, config=cfg)
         text = (getattr(r, "text", None) or "").strip()
         served = getattr(r, "model_version", None) or model
         if not text:
@@ -102,6 +134,8 @@ class Caller:
     def _claude(self, model, prompt):
         kwargs = {"model": model, "max_tokens": 16000, "output_config": {"effort": "low"},  # 짧은 리뷰라 low
                   "messages": [{"role": "user", "content": prompt}]}
+        if self.system:
+            kwargs["system"] = self.system
         if model in CLAUDE_FALLBACK_MODELS:  # 안전 분류기가 거절하면 서버가 다른 모델로 이어서 답함
             r = self.client.beta.messages.create(betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs)
         else:
@@ -201,6 +235,8 @@ def main():
     ap.add_argument("--retry-failed", action="store_true", help="거절·오류로 넘어간 행(api_note 있음)도 다시 시도")
     ap.add_argument("--max-errors", type=int, default=20, help="오류가 이만큼 연달아 나면 멈춤")
     ap.add_argument("--dry-run", action="store_true", help="API 호출 없이 프롬프트 2개만 출력")
+    ap.add_argument("--no-system", action="store_true",
+                    help="연구 목적 안내(시스템 프롬프트)를 빼고 보냄 — 손으로 채팅창에 붙여 넣는 것과 같은 조건")
     args = ap.parse_args()
 
     with open(args.csv, encoding="utf-8-sig", newline="") as f:
@@ -227,6 +263,8 @@ def main():
     done = sum(1 for r in rows if (r.get("text") or "").strip())
     print(f"{args.csv}: 전체 {len(rows):,}행 · 채워짐 {done:,} · 이번에 채울 {len(todo):,} · {provider} {models}")
     if args.dry_run:
+        if not args.no_system:
+            print(f"\n[시스템 안내]\n{SYSTEM_PROMPT}")
         for i in todo[:2]:
             print(f"\n--- {rows[i]['task_id']} → {models[i % len(models)]}\n{rows[i]['prompt']}")
         return
@@ -240,7 +278,7 @@ def main():
             sys.exit(msg)
         print(f"  ⚠ {msg} (ant auth login 으로 로그인했다면 그대로 진행)")
 
-    caller = Caller(provider)
+    caller = Caller(provider, system=None if args.no_system else SYSTEM_PROMPT)
     stats, served = Counter(), Counter()
     state = {"since_save": 0, "streak": 0, "fatal": None}
     stop = threading.Event()
@@ -328,8 +366,9 @@ def main():
     print(f"\n저장 → {args.csv} · 이번에 {dict(stats)} · 실제 답한 모델 {dict(served)} · 남은 빈 칸 {left:,}")
     if state["fatal"]:
         sys.exit(f"⚠ 멈춤: {state['fatal']}\n{hint(provider)}")
-    if stats.get("refusal") or stats.get("empty"):
-        print("  거절·빈 답은 api_note에 적어 두었어요. 몇 건이면 그대로 두고, 많으면 해당 프롬프트를 확인하세요.")
+    if stats.get("refusal") or stats.get("empty") or stats.get("text_refusal"):
+        print("  거절(refusal·text_refusal)·빈 답은 text를 비워 두고 api_note에 적었어요(학습 데이터에 안 들어감).\n"
+              "  몇 % 이내면 그대로 두세요. 다시 시도: --retry-failed  /  다른 모델에 맡기기: --retry-failed --models <모델>")
 
 
 if __name__ == "__main__":

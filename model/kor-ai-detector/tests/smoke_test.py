@@ -287,7 +287,8 @@ def test_fill_ai_tasks():
             w = csv.writer(f)
             w.writerow(["task_id", "generator", "product_id", "prompt", "text", "model_version"])
             for i in range(9):
-                w.writerow([f"claude-{i:05d}", "claude", f"p{i}", "이건 거절해 줘" if i == 4 else f"리뷰 써 줘 {i}",
+                prompt = "이건 거절해 줘" if i == 4 else ("말로 거절하는 경우" if i == 7 else f"리뷰 써 줘 {i}")
+                w.writerow([f"claude-{i:05d}", "claude", f"p{i}", prompt,
                             "이미 채움" if i == 0 else "", "m0" if i == 0 else ""])
         out = run("fill_ai_tasks.py", path, "--provider", "fake", "--models", "a", "b", "--limit", "5", "--save-every", "2")
         rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
@@ -298,9 +299,10 @@ def test_fill_ai_tasks():
         assert all(not r["text"] for r in rows[6:])                                   # --limit 5
         run("fill_ai_tasks.py", path, "--provider", "fake", "--models", "a", "b")     # 이어서: 나머지만
         rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
-        assert sum(1 for r in rows if r["text"]) == 8 and not rows[4]["text"], "남은 빈 칸 = 거절 1건"
+        assert sum(1 for r in rows if r["text"]) == 7 and not rows[4]["text"], "남은 빈 칸 = 거절 2건"
+        assert rows[7]["api_note"] == "text_refusal" and not rows[7]["text"]          # 말로 한 거절은 리뷰로 저장 안 함
         run("make_ai_tasks.py", "merge", path, "--out", d)
-        assert len(load(os.path.join(d, "ai_claude.jsonl"))) == 8
+        assert len(load(os.path.join(d, "ai_claude.jsonl"))) == 7
         assert "실제 답한 모델" in out
     print("✓ fill_ai_tasks(빈 칸만 채우기·모델 번갈아·거절 기록·이어서 하기)")
 

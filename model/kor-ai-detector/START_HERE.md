@@ -41,9 +41,18 @@ python convert_sources.py                             # 네이버(+쿠팡) → d
 ## [D] AI 리뷰 수집 — **팀이 할 일, 지금 가장 중요** (이게 있어야 학습 가능)
 
 ```bash
+python convert_sources.py                                          # 최신 쿠팡 수집분 반영 (make 전에 항상)
 python make_ai_tasks.py make --n 1000 --generators chatgpt claude gemini
-# → data/ai_tasks/tasks_chatgpt.csv · tasks_claude.csv · tasks_gemini.csv
+# → data/ai_tasks/tasks_chatgpt.csv · tasks_claude.csv · tasks_gemini.csv  (--n 은 생성 모델마다의 건수)
 ```
+**어떤 리뷰를 기준으로 만드나?** `make`를 실행하는 순간 `data/raw/*_human.jsonl`에 있는 리뷰에서 고릅니다(그 뒤에 모은 리뷰는 이미 만든 작업표에 반영되지 않음).
+- 기준 리뷰의 **50%는 쿠팡**(`--coupang-share`), 쿠팡 몫은 **카테고리마다 똑같이** 나눕니다. 나머지는 네이버.
+- 한 카테고리의 AI 수는 그 카테고리 사람 리뷰의 절반을 넘지 않게 자동으로 줄입니다(넘으면 "그 카테고리 = AI" 지름길이 생김). 줄인 몫은 다른 카테고리 → 네이버로 갑니다.
+- 쿠팡 카테고리를 더 모은 뒤에는 **추가 묶음**으로 만드세요. 채우던 작업표는 그대로 두고, 이미 쓴 기준 리뷰는 피합니다:
+  ```bash
+  python convert_sources.py && python make_ai_tasks.py make --batch b2 --n 500 --generators chatgpt claude gemini
+  # → tasks_chatgpt_b2.csv …   (답을 채운 작업표는 실수로 덮어쓰지 않도록 막혀 있음)
+  ```
 1. CSV를 엑셀·구글 시트로 엽니다. 행마다 `prompt` 칸을 해당 서비스(ChatGPT·Claude·Gemini)의 **새 대화**에 붙여 넣습니다.
 2. 답을 그대로 `text` 칸에, 실제로 쓴 모델명(예: `gpt-4o`, `claude-sonnet-5-5`, `gemini-2.5-flash`)을 `model_version` 칸에 적습니다.
    - "물론입니다! 다음은 리뷰입니다:" 같은 안내 문구는 지우지 않아도 됩니다(자동 정리). 그 밖의 내용은 손대지 마세요.
@@ -66,7 +75,7 @@ python make_ai_tasks.py make --n 1000 --generators chatgpt claude gemini
 python prepare_data.py \
   --lgc ../data/raw/XDAC_obs/LGC_data/LGC_data_v1.0.json \
   --lgc-all-ai --lgc-text-field generated_comment --lgc-generator-field llm_model_family \
-  --human-reviews data/raw/naver_human.jsonl \
+  --human-reviews data/raw/naver_human.jsonl data/raw/coupang_human.jsonl \
   --ai-reviews data/raw/ai_chatgpt.jsonl data/raw/ai_claude.jsonl data/raw/ai_gemini.jsonl \
   --human-before 2022-12-01 --holdout-generators gemini --out data/processed
 ```
@@ -74,7 +83,8 @@ python prepare_data.py \
 - 사람 리뷰(20만)는 AI 수 × 1(`--human-ratio`)로 **별점·길이를 맞춰** 자동으로 줄입니다.
 - 네이버엔 줄바꿈이 없어서, AI 쪽에만 줄바꿈이 있으면 양쪽 줄바꿈을 공백으로 바꿉니다(`--newlines auto`, 이유가 출력됨).
 - **마지막 [지름길 점검]을 꼭 보세요.** ⚠가 뜬 특징(길이·마침표 등)이 있으면 모델이 AI다움이 아니라 그 차이로 구분합니다 → [D]의 생성 방식을 고친 뒤 다시.
-- 쿠팡이 모이면 `--human-reviews`에 `data/raw/coupang_human.jsonl`을 더하고 `--test-only-platforms coupang`으로 플랫폼 교차 테스트부터 하세요(`python convert_sources.py`를 다시 실행해 최신화).
+- 쿠팡 사람 리뷰도 넣으세요: `--human-reviews data/raw/naver_human.jsonl data/raw/coupang_human.jsonl`. 사람 리뷰는 AI와 **같은 플랫폼·카테고리**에서 짝을 맞춰 뽑습니다.
+- 플랫폼 교차 테스트를 하려면 `--test-only-platforms coupang`. 이때 쿠팡 기준 AI 리뷰(약 절반)도 학습에서 빠지고 테스트로만 갑니다 → 학습량이 줄어드니 확인용으로 한 번 돌리고, 최종 모델은 빼고 학습하세요.
 
 ## [F] 학습 (리뷰)
 

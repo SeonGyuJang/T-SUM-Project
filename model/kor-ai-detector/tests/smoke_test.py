@@ -4,6 +4,7 @@ python tests/smoke_test.py
 """
 import csv
 import json
+from collections import Counter
 import os
 import py_compile
 import random
@@ -246,7 +247,60 @@ def test_convert_and_tasks():
         run("make_ai_tasks.py", "merge", path, "--out", raw)
         ai = load(os.path.join(raw, "ai_claude.jsonl"))
         assert len(ai) == 8 and all(r["generator"] == "claude" and r["product_id"] for r in ai)
-    print("✓ convert_sources(네이버·쿠팡 → 공통 형식) + make_ai_tasks(작업표 만들기·합치기)")
+        # 채운 작업표는 덮어쓰지 않음 → --batch 로 새 묶음, 이전 기준 리뷰는 피함
+        r = subprocess.run([PY, "make_ai_tasks.py", "make", "--human", os.path.join(raw, "naver_human.jsonl"),
+                            "--n", "5", "--generators", "claude", "--out", tasks], cwd=ROOT, capture_output=True, text=True)
+        assert r.returncode != 0 and "덮어쓰지 않습니다" in (r.stdout + r.stderr), r.stdout + r.stderr
+        run("make_ai_tasks.py", "make", "--human", os.path.join(raw, "naver_human.jsonl"),
+            "--n", "5", "--generators", "claude", "--batch", "b2", "--out", tasks)
+        b2 = list(csv.DictReader(open(os.path.join(tasks, "tasks_claude_b2.csv"), encoding="utf-8-sig")))
+        assert len(b2) == 5 and b2[0]["task_id"].startswith("claude-b2-")
+        assert not {x["anchor_id"] for x in b2} & {x["anchor_id"] for x in rows}
+        assert len(load(os.path.join(raw, "ai_claude.jsonl"))) == 8  # 원래 작업표는 그대로
+    print("✓ convert_sources(네이버·쿠팡 → 공통 형식) + make_ai_tasks(작업표 만들기·합치기·추가 묶음)")
+
+
+def test_anchor_mix_and_matching():
+    """쿠팡 몫을 카테고리마다 고르게 + 사람 리뷰를 AI와 같은 플랫폼·카테고리에서 뽑기."""
+    with tempfile.TemporaryDirectory() as d:
+        raw = os.path.join(d, "raw")
+        os.makedirs(raw)
+        with open(os.path.join(raw, "naver_human.jsonl"), "w", encoding="utf-8") as f:
+            for i in range(2000):
+                f.write(json.dumps({"text": f"네이버 리뷰 {i} 좋아요 배송 빨라요", "product_id": f"nv-{i}", "platform": "naver",
+                                    "date": "2020-07-31", "rating": 1 + i % 5, "source_id": f"nv-{i}"}, ensure_ascii=False) + "\n")
+        with open(os.path.join(raw, "coupang_human.jsonl"), "w", encoding="utf-8") as f:
+            for i in range(300):
+                cat = "건강식품" if i < 270 else "주방"  # 건강식품이 90%
+                f.write(json.dumps({"text": f"{cat} 리뷰 {i} 괜찮네요 재구매 의사 있어요", "product_id": f"cp-{i // 10}", "platform": "coupang",
+                                    "date": "2021-05-01", "rating": 1 + i % 5, "category": cat, "product_name": f"{cat} 상품",
+                                    "source_id": f"cp-{i}"}, ensure_ascii=False) + "\n")
+        tasks = os.path.join(d, "tasks")
+        out = run("make_ai_tasks.py", "make", "--human", os.path.join(raw, "naver_human.jsonl"), os.path.join(raw, "coupang_human.jsonl"),
+                  "--n", "400", "--generators", "claude", "--out", tasks)
+        rows = list(csv.DictReader(open(os.path.join(tasks, "tasks_claude.csv"), encoding="utf-8-sig")))
+        plat = Counter(r["platform"] for r in rows)
+        cats = Counter(r["category"] for r in rows if r["platform"] == "coupang")
+        assert 100 < plat["coupang"] < 200, plat          # 기본 50%지만 주방(30건)이 상한에 걸려 일부는 네이버로
+        assert 5 <= cats["주방"] <= 25, cats               # 사람 리뷰 30건의 절반(15) 근처까지만
+        assert cats["건강식품"] > 100, cats                # 넘친 몫은 여유 있는 카테고리로
+        assert "몫을 줄인 출처" in out, out
+        for i, r in enumerate(rows):
+            r["text"] = f"AI가 쓴 {r['category'] or '네이버'} 리뷰 {i} 정말 만족스러워요"
+        with open(os.path.join(tasks, "tasks_claude.csv"), "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+        run("make_ai_tasks.py", "merge", os.path.join(tasks, "tasks_claude.csv"), "--out", raw)
+        o = os.path.join(d, "p")
+        run("prepare_data.py", "--human-reviews", os.path.join(raw, "naver_human.jsonl"), os.path.join(raw, "coupang_human.jsonl"),
+            "--ai-reviews", os.path.join(raw, "ai_claude.jsonl"), "--out", o)
+        allrows = [x for k in ("train", "val", "test") for x in load(os.path.join(o, f"stage2_{k}.jsonl"))]
+        hp = Counter((x["platform"], x.get("category", "")) for x in allrows if x["label"] == 0)
+        ap_ = Counter((x["platform"], x.get("category", "")) for x in allrows if x["label"] == 1)
+        for k, n in ap_.items():  # 사람 쪽 출처 분포가 AI 쪽과 거의 같아야 함
+            assert abs(hp[k] - n) <= max(5, 0.15 * n), (k, hp[k], n, hp, ap_)
+    print("✓ 기준 리뷰 출처 고르게(쿠팡 카테고리별) + 사람 리뷰를 AI와 같은 출처에서 뽑기")
 
 
 def test_compile():
@@ -264,5 +318,6 @@ if __name__ == "__main__":
     test_lgc_ai_only()
     test_newlines_auto()
     test_convert_and_tasks()
+    test_anchor_mix_and_matching()
     test_prepare_and_evaluate()
     print("\n모든 점검 통과")

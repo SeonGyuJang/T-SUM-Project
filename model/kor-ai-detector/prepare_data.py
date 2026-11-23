@@ -217,26 +217,41 @@ def balance_humans(rows, ratio, rng, stats):
     if not ai or ratio <= 0 or len(human) <= target:
         return rows
 
-    def key(r):
-        return (str(r.get("rating") or ""), length_bucket(r["text"]))
+    # 칸 = 플랫폼·카테고리·별점·길이. AI가 쿠팡 건강식품 기준으로 만들어졌으면 사람도 쿠팡 건강식품에서 뽑아야
+    # 모델이 "상품 주제·플랫폼"이 아니라 AI 말투로 구분한다. 칸에 사람 리뷰가 모자라면 카테고리를 빼고, 그다음 플랫폼을 빼고 채운다.
+    def keys(r):
+        rating, lb = str(r.get("rating") or ""), length_bucket(r["text"])
+        plat = r.get("platform")  # AI 리뷰의 platform = 기준 리뷰의 플랫폼 (make_ai_tasks가 기록)
+        return [(plat, str(r.get("category") or ""), rating, lb), (plat, rating, lb), (rating, lb)]
 
-    pool = defaultdict(list)
+    pools = [defaultdict(list) for _ in range(3)]
     for h in human:
-        pool[key(h)].append(h)
-    for v in pool.values():
-        rng.shuffle(v)
-    want = Counter(key(a) for a in ai)
+        for lvl, k in enumerate(keys(h)):
+            pools[lvl][k].append(h)
+    for p in pools:
+        for v in p.values():
+            rng.shuffle(v)
     picked, used = [], set()
-    for k, n in want.items():  # 칸마다 AI 수 × ratio 만큼
-        take = pool.get(k, [])[: int(round(n * ratio))]
-        picked += take
-        used.update(id(x) for x in take)
+    for lvl in range(3):  # 가장 세밀한 칸부터, 모자란 몫만 다음 단계로
+        need = Counter()
+        for a in ai:
+            need[keys(a)[lvl]] += ratio
+        for a_k, n in need.items():
+            have = sum(1 for x in picked if keys(x)[lvl] == a_k) if lvl else 0
+            want_n = int(round(n)) - have
+            for h in pools[lvl].get(a_k, []):
+                if want_n <= 0:
+                    break
+                if id(h) not in used:
+                    picked.append(h)
+                    used.add(id(h))
+                    want_n -= 1
     rest = [h for h in human if id(h) not in used]
     rng.shuffle(rest)
     picked += rest[: max(0, target - len(picked))]  # 칸이 모자라면 나머지에서 채움
     stats["human_balanced_from"] = len(human)
     stats["human_balanced_to"] = len(picked)
-    print(f"[균형 맞추기] 사람 리뷰 {len(human):,}건 → {len(picked):,}건 (AI {len(ai):,}건 × {ratio:g}, 별점·길이 분포를 AI에 맞춤)")
+    print(f"[균형 맞추기] 사람 리뷰 {len(human):,}건 → {len(picked):,}건 (AI {len(ai):,}건 × {ratio:g}, 플랫폼·카테고리·별점·길이 분포를 AI에 맞춤)")
     return picked + ai
 
 

@@ -31,6 +31,7 @@ model/MODEL_DEV.md 4.2(데이터 설계)의 원천 데이터를 모은다.
   python collect_training_data.py collect training_products.txt      # 상품 목록 수집 (중단 후 다시 실행하면 이어서)
   python collect_training_data.py collect training_products.txt --per-star 30 --post-per-star 10
   python collect_training_data.py stats                              # 모인 양 보기
+  python collect_training_data.py export                             # 학습 코드용 jsonl (리뷰 한 줄에 하나)
   python collect_training_data.py chrome                             # 원격 연결용 Chrome 띄우기 (Mac)
   python collect_training_data.py collect training_products.txt --cdp-url http://localhost:9222   # 그 Chrome에 붙어서 수집
 
@@ -51,13 +52,25 @@ model/MODEL_DEV.md 4.2(데이터 설계)의 원천 데이터를 모은다.
                 같은 IP에서 동시에 요청하므로 N을 늘릴수록 차단 위험이 커진다(권장 2~3).
 
 결과 (git에 올라가지 않는 model/data/ 아래)
-  model/data/raw/coupang/coupang_training.json   수집한 모든 쿠팡 데이터 (JSON 파일 하나)
-      {"meta": {...}, "summary": {...},
+  model/data/raw/coupang/coupang_training.json   수집한 모든 쿠팡 데이터 (JSON 파일 하나, 형식 realstar-training/2)
+      {"schema", "meta": {source, cutoff, post_from, …}, "summary": {...},
        "categories": {"<카테고리 URL>": {"name", "listed_at", "products": [{product_id, url, name}, ...]}},
-       "products": {"<상품ID>": {"name", "url", "category", "status": "collected"|"no_old", "checked_at",
-                                 "check": {...}, "counts": {...}, "reviews": [리뷰, ...]}}}
-      리뷰 = MODEL_DEV.md 4.12.1 형식 + period(pre_chatgpt/post_chatgpt) · length_bucket
+       "products": {
+         "<상품ID>": {
+           "product_id", "name", "url", "category", "status": "collected"|"no_old",
+           "checked_at", "collected_at", "scraper_version", "check": {...},
+           "review_count": {"total": 32, "pre_chatgpt": 32, "post_chatgpt": 0,          ← 이 상품에서 모은 개수
+                            "by_star": {"5": {"total", "pre_chatgpt", "post_chatgpt"}, …}},
+           "reviews": {"5": {"pre_chatgpt": [리뷰, …], "post_chatgpt": [리뷰, …]}, "4": {…}, …, "1": {…}}
+         }}}
+      리뷰 = {"id", "title", "content", "created_at", "option_name", "has_photo", "helpful_count", "length_bucket"}
+             (상품ID·카테고리·상품명·별점·시기·수집 시각은 위쪽 묶음에 한 번만 적는다)
+      예전 형식(리뷰마다 모든 정보가 반복되던 realstar-training/1) 파일은 처음 열 때 자동으로 바꾸고,
+      원본은 coupang_training.backup-<시각>.json 으로 남긴다.
+      본문 없이 별점만 남긴 리뷰는 저장하지 않는다(예전에 저장된 것도 열 때 지운다).
       상품 하나가 끝날 때마다 바로 저장한다(임시 파일에 쓴 뒤 바꿔치기 → 중간에 끊겨도 파일이 깨지지 않음).
+  python collect_training_data.py export   → 학습 코드용으로 리뷰 한 줄에 하나씩 펼친 파일
+      model/data/raw/coupang/coupang_training_reviews.jsonl  (MODEL_DEV.md 4.12.1 형식: 리뷰마다 모든 정보 포함)
   model/data/raw/naver/naver_shopping.jsonl      네이버 쇼핑 변환 결과 (별도 파일)
 
 쿠팡이 차단(403·접근 거부)하면 모든 브라우저를 닫고 5분 → 15분 → 30분 쉬었다가, 끝난 상품은 건너뛰고 이어서 모은다.
@@ -95,7 +108,10 @@ DATE_SORT = "DATE_DESC"           # 쿠팡 리뷰 최신순 정렬값 (inspect�
 PER_STAR = 30                     # 상품·별점당 2022-11-30 이전 리뷰 최대 개수 (MODEL_DEV.md 4.2.3)
 POST_PER_STAR = 10                # 상품·별점당 2023년 이후 리뷰 최대 개수 (0이면 수집 안 함)
 CAP_REVIEWS = 1500                # 쿠팡이 리뷰 목록 하나(정렬×별점)에서 보여 주는 최대 개수. 그 뒤 페이지는 비어 있다
-FALLBACK_PAGES = 30               # 날짜가 섞여 나오는 목록에서 1,500개 안을 훑어볼 최대 페이지 (--scan-pages)
+FALLBACK_PAGES = 0                # 날짜가 섞여 나오는 목록에서 훑어볼 최대 페이지. 0 = 끝까지(1,500개 전부) (--scan-pages)
+STOP_IF_NEW = False               # --stop-if-new: 끝까지 본 별점 목록이 2023년 중반 이후부터 시작하면 나머지 별점은 건너뜀
+NEW_PRODUCT_GAP = timedelta(days=180)  # 기준일 + 180일(2023-05-29) 이후부터 리뷰가 시작되면 '신상품'으로 본다
+MIN_FULL_LIST = 20                # 신상품 판단에 쓸 별점 목록의 최소 리뷰 수
 QUICK_SKIP = False                # --quick-skip: 리뷰 1,500개 초과 상품도 전체 목록 1,500번째가 이후면 바로 건너뜀
 PAGE_ATTEMPTS = 3
 PAGE_BACKOFF = (5.0, 20.0)        # 재시도 전 대기(초)
@@ -189,7 +205,61 @@ def load_crawler() -> Any:
     if _DELAY_SCALE != 1.0:
         lo, hi = cr.API_DELAY_RANGE
         cr.API_DELAY_RANGE = (lo * _DELAY_SCALE, hi * _DELAY_SCALE)
+    import logging  # noqa: PLC0415
+    logging.getLogger("scrapling").setLevel(logging.WARNING)  # 'Fetched (200) <GET …>' 같은 줄은 숨기고 경고·오류만
     return cr
+
+
+# ──────────────────────────────────────────────────────────────
+# 터미널 출력 도우미
+# ──────────────────────────────────────────────────────────────
+def short(text: str, n: int) -> str:
+    text = re.sub(r"\s+", " ", text or "").strip()
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def short_err(err: str) -> str:
+    """오류 문구에서 긴 주소를 빼고 핵심만."""
+    return short(re.sub(r"\s*\(https?://[^)]*\)", "", err or ""), 50)
+
+
+def fmt_secs(sec: float) -> str:
+    sec = int(sec)
+    if sec < 60:
+        return f"{sec}초"
+    if sec < 3600:
+        return f"{sec // 60}분 {sec % 60:02d}초"
+    return f"{sec // 3600}시간 {sec % 3600 // 60:02d}분"
+
+
+def star_line(star: int, res: dict[str, Any], quota: int, post_on: bool) -> str | None:
+    """별점 하나의 결과를 한 줄로.
+    예)   4점  리뷰    843개  이전  9/20   843개 모두 봄 · 별점만 남긴 2개 제외"""
+    if res.get("method") == "none":
+        return None
+    n = res.get("count")
+    got = len(res["pre"])
+    mark = "✓" if got >= quota else " "
+    if n is None:
+        where = "확인함"
+    elif res["method"] == "date_sort":
+        where = (f"최신 1,500개까지 봄 · 끝 날짜 {res['window_oldest']}" if n > CAP_REVIEWS
+                 else f"{n:,}개 모두 봄 · 가장 오래된 {res['window_oldest']}") if res.get("window_oldest") else "확인함"
+    elif got >= quota:
+        where = "필요한 만큼 찾고 멈춤"
+    elif res.get("complete"):
+        where = f"{n:,}개 모두 봄" + (f" · 가장 오래된 {res['oldest_seen']}" if res.get("oldest_seen") else "")
+    elif n > CAP_REVIEWS:
+        where = "최신 1,500개 모두 봄 (날짜 섞인 목록)"
+    else:
+        where = "일부만 봄 (--scan-pages 0이면 끝까지)"
+    extra = []
+    if post_on:
+        extra.append(f"이후 {len(res['post'])}")
+    if res.get("skipped_empty"):
+        extra.append(f"별점만 남긴 {res['skipped_empty']}개 제외")
+    cnt = f"{n:>7,}개" if n is not None else "      ?개"
+    return f"   {star}점  리뷰 {cnt}  이전 {got:>2}/{quota:<3}{mark}  {where}" + ("".join(f" · {x}" for x in extra))
 
 
 def read_products(path: Path) -> list[dict[str, str]]:
@@ -222,7 +292,10 @@ def read_products(path: Path) -> list[dict[str, str]]:
 
 
 STORE_NAME = "coupang_training.json"
-STORE_SCHEMA = "realstar-training/1"
+STORE_SCHEMA = "realstar-training/2"
+PERIODS = ("pre_chatgpt", "post_chatgpt")
+SOURCE = "coupang_reviews"
+EXPORT_NAME = "coupang_training_reviews.jsonl"
 
 
 class Store:
@@ -239,6 +312,10 @@ class Store:
                 d = json.loads(self.path.read_text(encoding="utf-8"))
                 d.setdefault("categories", {})
                 d.setdefault("products", {})
+                if self._upgrade(d):  # 바꾸기 전에 원본을 남긴다
+                    bak = self.path.with_name(f"{self.path.stem}.backup-{datetime.now(KST):%Y%m%d-%H%M%S}.json")
+                    shutil.copy2(self.path, bak)
+                    print(f"  저장 파일을 정리했어요 (상품 {len(d['products'])}개). 바꾸기 전 원본: {bak.name}")
                 return d  # type: ignore[no-any-return]
             except ValueError as e:
                 bak = self.path.with_suffix(f".broken-{datetime.now(KST):%Y%m%d%H%M%S}.json")
@@ -246,7 +323,38 @@ class Store:
                 print(f"  ⚠ {self.path.name}을 읽지 못해 {bak.name}(으)로 옮기고 새로 시작해요: {e}")
         d = {"schema": STORE_SCHEMA, "meta": {"created_at": now_iso()}, "summary": {}, "categories": {}, "products": {}}
         self._import_legacy(d)
+        self._upgrade(d)
         return d
+
+    @staticmethod
+    def _upgrade(d: dict[str, Any]) -> bool:
+        """예전 상품을 새 구조(별점 → 시기 → 리뷰)로 바꾸고, 본문 없는 리뷰를 지운다. 바꾼 게 있으면 True."""
+        changed = False
+        removed = refill = 0
+        for pid, prod in list(d["products"].items()):
+            rows = prod.get("reviews")
+            if isinstance(rows, list):
+                prod = d["products"][pid] = make_product(prod, rows)
+                changed = True
+            n = 0
+            for groups in (prod.get("reviews") or {}).values():
+                for per, items in groups.items():
+                    keep = [c for c in items if (c.get("content") or "").strip()]
+                    n += len(items) - len(keep)
+                    groups[per] = keep
+            if n:
+                removed += n
+                changed = True
+                prod["review_count"] = count_reviews(prod["reviews"])
+                if prod.get("status") == "collected" and not prod["review_count"]["pre_chatgpt"]:
+                    prod["status"] = "recheck"  # 남은 이전 리뷰가 없으면 다음 실행 때 다시 수집
+                    refill += 1
+        if removed:
+            print(f"  본문 없는(별점만 남긴) 리뷰 {removed:,}건을 지웠어요"
+                  + (f" · 이전 리뷰가 하나도 안 남은 상품 {refill}개는 다음 실행 때 다시 수집해요" if refill else ""))
+        if changed:
+            d["schema"] = STORE_SCHEMA
+        return changed
 
     def _import_legacy(self, d: dict[str, Any]) -> None:
         """이전 형식(*.jsonl + _state.json)으로 모은 데이터가 있으면 한 번만 옮겨 온다."""
@@ -276,8 +384,6 @@ class Store:
                 prod["check"] = info["check"]
         for url, c in (state.get("categories") or {}).items():
             d["categories"][url] = {"name": c.get("name"), "listed_at": c.get("listed_at"), "products": c.get("products", [])}
-        for prod in d["products"].values():
-            prod["counts"] = review_counts(prod.get("reviews", []))
         d["meta"]["imported_from"] = [f.name for f in files] + (["_state.json"] if state_p.exists() else [])
         print(f"  이전 형식 데이터를 {STORE_NAME}로 옮겨 왔어요: 상품 {len(d['products'])}개 (원본 파일은 그대로 둠)")
 
@@ -302,13 +408,13 @@ class Store:
 
     def put_product(self, item: dict[str, str], result: dict[str, Any]) -> dict[str, Any]:
         rows = result["rows"]
-        prod = {
+        base = {
             "product_id": item["product_id"], "name": result.get("name") or item.get("name"), "url": item.get("url"),
             "category": item.get("category") or None,
             "status": "collected" if any(r["period"] == "pre_chatgpt" for r in rows) else "no_old",
             "checked_at": now_iso(), "check": result.get("check") or {}, "worker": result.get("worker"),
-            "counts": review_counts(rows), "reviews": rows,
         }
+        prod = make_product(base, rows)
         self.data["products"][item["product_id"]] = prod
         self.save()
         return prod
@@ -316,15 +422,22 @@ class Store:
     def save(self) -> None:
         d = self.data
         d["schema"] = STORE_SCHEMA
-        d.setdefault("meta", {}).update({"updated_at": now_iso(), "cutoff": CUTOFF.isoformat(),
-                                         "post_from": POST_FROM.isoformat(), "scraper_version": SCRAPER_VERSION})
+        d.setdefault("meta", {}).update({
+            "updated_at": now_iso(), "source": SOURCE, "cutoff": CUTOFF.isoformat(), "post_from": POST_FROM.isoformat(),
+            "scraper_version": SCRAPER_VERSION,
+            "layout": "products.<상품ID>.reviews.<별점>.<pre_chatgpt|post_chatgpt> = [리뷰]",
+        })
         prods = d["products"].values()
+        rc = [p.get("review_count") or {} for p in prods]
         d["summary"] = {
             "products_checked": len(d["products"]),
             "products_collected": sum(1 for p in prods if p.get("status") == "collected"),
             "products_no_old": sum(1 for p in prods if p.get("status") == "no_old"),
-            "reviews_pre_chatgpt": sum(p.get("counts", {}).get("pre_chatgpt", 0) for p in prods),
-            "reviews_post_chatgpt": sum(p.get("counts", {}).get("post_chatgpt", 0) for p in prods),
+            "reviews_total": sum(c.get("total", 0) for c in rc),
+            "reviews_pre_chatgpt": sum(c.get("pre_chatgpt", 0) for c in rc),
+            "reviews_post_chatgpt": sum(c.get("post_chatgpt", 0) for c in rc),
+            "reviews_pre_by_star": {str(st): sum(((c.get("by_star") or {}).get(str(st)) or {}).get("pre_chatgpt", 0) for c in rc)
+                                    for st in STARS},
         }
         self.dir.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".json.tmp")
@@ -335,16 +448,96 @@ class Store:
         os.replace(tmp, self.path)  # 바꿔치기: 저장 도중 끊겨도 이전 파일이 남는다
 
     def reviews(self) -> list[dict[str, Any]]:
-        return [r for p in self.data["products"].values() for r in p.get("reviews", [])]
+        """모든 리뷰를 리뷰마다 모든 정보를 담은 형식(MODEL_DEV.md 4.12.1)으로 펼쳐서."""
+        return [r for p in self.data["products"].values() for r in flatten_product(p)]
 
 
-def review_counts(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    pre = [r for r in rows if r.get("period") == "pre_chatgpt"]
+# ── 저장 구조: 상품 → 별점 → 시기 → 리뷰 ──
+def compact_review(r: dict[str, Any]) -> dict[str, Any]:
+    """리뷰 하나에서 상품·별점·시기처럼 위쪽 묶음과 겹치는 정보를 뺀다."""
+    rid = str(r.get("review_id") or "")
+    prefix = f"cp-{r.get('product_id')}-"
     return {
-        "pre_chatgpt": len(pre),
-        "post_chatgpt": sum(1 for r in rows if r.get("period") == "post_chatgpt"),
-        "pre_by_star": {str(s): sum(1 for r in pre if r.get("star") == s) for s in STARS},
+        "id": rid[len(prefix):] if rid.startswith(prefix) else rid,
+        "title": r.get("title"),
+        "content": r.get("content") or "",
+        "created_at": r.get("created_at"),
+        "option_name": r.get("option_name"),
+        "has_photo": bool(r.get("has_photo")),
+        "helpful_count": r.get("helpful_count") or 0,
+        "length_bucket": r.get("length_bucket") or length_bucket(r.get("content") or ""),
     }
+
+
+def count_reviews(reviews: dict[str, dict[str, list[Any]]]) -> dict[str, Any]:
+    by_star = {}
+    for st in STARS:
+        g = reviews.get(str(st)) or {}
+        pre, post = len(g.get("pre_chatgpt") or []), len(g.get("post_chatgpt") or [])
+        by_star[str(st)] = {"total": pre + post, "pre_chatgpt": pre, "post_chatgpt": post}
+    pre = sum(v["pre_chatgpt"] for v in by_star.values())
+    post = sum(v["post_chatgpt"] for v in by_star.values())
+    return {"total": pre + post, "pre_chatgpt": pre, "post_chatgpt": post, "by_star": by_star}
+
+
+def make_product(base: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """상품 정보 + 펼쳐진 리뷰 목록 → 새 저장 구조. (예전 형식 변환에도 쓴다)"""
+    reviews: dict[str, dict[str, list[dict[str, Any]]]] = {str(st): {per: [] for per in PERIODS} for st in STARS}
+    seen: set[str] = set()
+    for r in rows:
+        star, per = str(r.get("star")), r.get("period")
+        if star not in reviews or per not in PERIODS:
+            continue  # 2022-11-30 ~ 2022-12-31(경계 구간)은 원래 저장하지 않는다
+        c = compact_review(r)
+        if not c["content"].strip():
+            continue  # 별점만 남긴 리뷰는 저장하지 않는다
+        if c["id"] and c["id"] in seen:
+            continue
+        seen.add(c["id"])
+        reviews[star][per].append(c)
+    first = rows[0] if rows else {}
+    return {
+        "product_id": base.get("product_id"),
+        "name": base.get("name") or first.get("product_name"),
+        "url": base.get("url"),
+        "category": base.get("category") or first.get("category"),
+        "status": base.get("status") or ("collected" if any(r.get("period") == "pre_chatgpt" for r in rows) else "no_old"),
+        "checked_at": base.get("checked_at"),
+        "collected_at": base.get("collected_at") or first.get("collected_at") or base.get("checked_at"),
+        "scraper_version": base.get("scraper_version") or first.get("scraper_version") or SCRAPER_VERSION,
+        "worker": base.get("worker"),
+        "check": base.get("check") or {},
+        "review_count": count_reviews(reviews),
+        "reviews": reviews,
+    }
+
+
+def flatten_product(prod: dict[str, Any]) -> list[dict[str, Any]]:
+    """새 저장 구조의 상품 하나 → 리뷰마다 모든 정보를 담은 목록 (MODEL_DEV.md 4.12.1 + period · length_bucket)."""
+    pid = prod.get("product_id")
+    out = []
+    for star, groups in (prod.get("reviews") or {}).items():
+        for per, items in (groups or {}).items():
+            for c in items:
+                out.append({
+                    "review_id": f"cp-{pid}-{c.get('id')}",
+                    "product_id": pid,
+                    "category": prod.get("category"),
+                    "product_name": prod.get("name"),
+                    "star": int(star),
+                    "title": c.get("title"),
+                    "content": c.get("content") or "",
+                    "created_at": c.get("created_at"),
+                    "has_photo": bool(c.get("has_photo")),
+                    "helpful_count": c.get("helpful_count") or 0,
+                    "option_name": c.get("option_name"),
+                    "period": per,
+                    "length_bucket": c.get("length_bucket"),
+                    "collected_at": prod.get("collected_at"),
+                    "source": SOURCE,
+                    "scraper_version": prod.get("scraper_version"),
+                })
+    return out
 
 
 # ──────────────────────────────────────────────────────────────
@@ -506,13 +699,15 @@ class ReviewPager:
                     k in last_err for k in ("403", "429", "JSON이 아닌", "차단 페이지"))
                 if blocked and not soft_waited:  # 처음 막히면 잠깐 쉬고 한 번 더
                     soft_waited = True
-                    self.log(f"      ⏸ {self.star or '전체'}{'점' if self.star else ''} {page_no}페이지 {last_err[:60]} → {SOFT_BLOCK_WAIT:.0f}초 쉬고 다시")
+                    where = f"{self.star}점 {page_no}페이지" if self.star else f"전체 목록 {page_no}페이지"
+                    self.log(f"   ⏸ 쿠팡이 잠깐 막았어요 ({where} · {short_err(last_err)}) → {SOFT_BLOCK_WAIT:.0f}초 쉬고 다시 시도")
                     self.page.wait_for_timeout(int(SOFT_BLOCK_WAIT * 1000))
                     continue
                 if blocked:
                     raise Blocked(last_err) from e
                 wait = PAGE_BACKOFF[min(attempt - 1, len(PAGE_BACKOFF) - 1)]
-                self.log(f"      ↻ {self.star or '전체'}{'점' if self.star else ''} {page_no}페이지 {last_err[:60]} → {wait}초 후 재시도")
+                where = f"{self.star}점 {page_no}페이지" if self.star else f"전체 목록 {page_no}페이지"
+                self.log(f"   ↻ 응답 오류 ({where} · {short_err(last_err)}) → {wait:.0f}초 뒤 다시 시도 ({attempt}/{PAGE_ATTEMPTS})")
                 self.page.wait_for_timeout(int(wait * 1000))
                 continue
             items = self.cr.find_review_list(data)
@@ -599,10 +794,12 @@ def collect_star(cr: Any, page: Any, pid: str, star: int, per_star: int, post_pe
     쿠팡은 별점 목록마다 최신 1,500개까지만 보여 준다.
       최신순으로 나오는 목록 → 1,500번째(더 적으면 마지막) 리뷰 날짜가 2022-11-30 이후면 이 별점은 과거 리뷰 없음.
                                이전이면 경계 페이지를 이진 탐색으로 찾아 1,500번째까지 고르게 담는다.
-      날짜가 섞여 나오는 목록 → 1,500개 안 어디에나 있을 수 있어 앞에서부터 훑는다(최대 FALLBACK_PAGES 페이지).
+      날짜가 섞여 나오는 목록 → 1,500개 안 어디에나 있을 수 있어 처음부터 끝까지 훑는다(FALLBACK_PAGES로 제한 가능).
+    본문이 비어 있는 리뷰(별점만 남긴 리뷰)는 담지 않는다.
     known_count: 상품 확인 단계에서 이미 알아낸 이 별점의 리뷰 수(0이면 요청 없이 끝)."""
     out: dict[str, Any] = {"pre": [], "post": [], "method": "date_sort", "requests": 0,
-                           "count": known_count, "window": 0, "window_oldest": None}
+                           "count": known_count, "window": 0, "window_oldest": None,
+                           "complete": False, "oldest_seen": None, "skipped_empty": 0}
     if known_count == 0:
         out["method"] = "none"
         return out
@@ -613,7 +810,7 @@ def collect_star(cr: Any, page: Any, pid: str, star: int, per_star: int, post_pe
         return out
 
     if post_per_star:
-        out["post"] = [r for r in first if r["_date"] and r["_date"] >= POST_FROM][:post_per_star]
+        out["post"] = [r for r in first if r["_date"] and r["_date"] >= POST_FROM and has_text(r)][:post_per_star]
 
     count = known_count if known_count is not None else (pager.total() or len(first))
     window = min(count, CAP_REVIEWS)
@@ -631,6 +828,9 @@ def collect_star(cr: Any, page: Any, pid: str, star: int, per_star: int, post_pe
             if key in seen or not r["_date"] or r["_date"] >= CUTOFF:
                 continue
             seen.add(key)
+            if not has_text(r):  # 별점만 남긴 리뷰는 건너뛴다
+                out["skipped_empty"] += 1
+                continue
             pre.append(r)
             added += 1
 
@@ -639,7 +839,6 @@ def collect_star(cr: Any, page: Any, pid: str, star: int, per_star: int, post_pe
         reach = find_reach(pager, last)
         oldest_reach = pager.oldest(reach)
         out["window_oldest"] = oldest_reach.isoformat() if oldest_reach else None
-        where = f"{window:,}번째(쿠팡이 보여 주는 끝)" if count > CAP_REVIEWS else f"마지막({count:,}번째)"
         if oldest_reach is not None and oldest_reach < CUTOFF:
             lo, hi = 1, reach  # 처음으로 2022-11-30 이전 리뷰가 나오는 페이지
             while lo < hi:
@@ -661,27 +860,42 @@ def collect_star(cr: Any, page: Any, pid: str, star: int, per_star: int, post_pe
                 take(pager.get(p))
                 p += 1
         elif oldest_reach is not None:
-            log(f"      · {star}점: {where} 리뷰가 {oldest_reach} → 2022-11-30 이전 리뷰 없음")
+            pass  # '끝 날짜 …' 로 별점 한 줄 요약에 나온다
+        out["complete"] = count <= CAP_REVIEWS  # 목록이 다 보이면 마지막 페이지 날짜가 이 별점의 가장 오래된 리뷰
     else:
         out["method"] = "scan"
-        scan_to = min(last, FALLBACK_PAGES)
+        scan_to = last if FALLBACK_PAGES <= 0 else min(last, FALLBACK_PAGES)
+        scanned = 0
         for p in range(1, scan_to + 1):
             got = pager.get(p)
             if not got:
                 break
+            scanned = p
             take(got)
             if post_per_star and len(out["post"]) < post_per_star:
-                extra = [r for r in got if r["_date"] and r["_date"] >= POST_FROM and r not in out["post"]]
+                extra = [r for r in got if r["_date"] and r["_date"] >= POST_FROM and has_text(r) and r not in out["post"]]
                 out["post"] += extra[: post_per_star - len(out["post"])]
             if len(pre) >= per_star:
                 break
-        if len(pre) < per_star and scan_to < last:
-            log(f"      · {star}점: 날짜가 섞여 나오는 목록 · {window:,}개 중 앞 {scan_to * cr.PAGE_SIZE:,}개만 훑음"
-                " (--scan-pages로 늘릴 수 있음)")
+        out["complete"] = scanned >= last and count <= CAP_REVIEWS
 
+    seen_dates = [r["_date"] for rs in pager.cache.values() for r in rs if r["_date"]]
+    out["oldest_seen"] = min(seen_dates).isoformat() if seen_dates else None
     out["pre"] = pre
     out["requests"] = pager.requests
     return out
+
+
+def has_text(r: dict[str, Any]) -> bool:
+    """본문이 있는 리뷰인지 (별점만 남긴 리뷰는 False)."""
+    return bool((r.get("content") or "").strip())
+
+
+def looks_new(res: dict[str, Any]) -> bool:
+    """끝까지 본 별점 목록이 기준일 + 180일 이후부터 시작 → 2023년 이후에 판매를 시작한 상품으로 본다."""
+    if not res.get("complete") or res.get("pre") or (res.get("count") or 0) < MIN_FULL_LIST or not res.get("oldest_seen"):
+        return False
+    return date.fromisoformat(res["oldest_seen"]) >= CUTOFF + NEW_PRODUCT_GAP
 
 
 def to_record(r: dict[str, Any], pid: str, product_name: str, category: str, collected_at: str) -> dict[str, Any]:
@@ -911,6 +1125,7 @@ def process_item(cr: Any, session: Any, item: dict[str, str], cfg: dict[str, Any
     mode=list:     별점마다 per_star개(+ 이후 리뷰 post_per_star개)"""
     pid = item["product_id"]
     box: dict[str, Any] = {"stars": {}, "check": {}}
+    t0 = time.time()
 
     def action(page: Any) -> Any:
         try:
@@ -931,19 +1146,21 @@ def process_item(cr: Any, session: Any, item: dict[str, str], cfg: dict[str, Any
                     res = collect_star(cr, page, pid, star, quota, cfg["post_per_star"], say, known_count=known.get(str(star)))
                     box["stars"][star] = res
                     remaining -= len(res["pre"])
-                    say(f"    {star}점: 이전 {len(res['pre'])}/{quota}"
-                        + (f" · 이후 {len(res['post'])}" if cfg["post_per_star"] else "")
-                        + (f"  (리뷰 {res['count']:,}개, 요청 {res['requests']}회, {res['method']})" if res["count"] is not None
-                           else f"  (요청 {res['requests']}회)"))
+                    line = star_line(star, res, quota, bool(cfg["post_per_star"]))
+                    if line:
+                        say(line)
+                    if STOP_IF_NEW and not any(r["pre"] for r in box["stars"].values()) and looks_new(res):
+                        box["stop_reason"] = (f"{star}점 리뷰 {res['count']:,}개를 끝까지 봤는데 가장 오래된 리뷰가 {res['oldest_seen']}"
+                                              " → 2023년 이후 판매 시작으로 보고 나머지 별점은 건너뜀 (--stop-if-new)")
+                        break
             else:
                 cr.warm_up(page)
                 for star in STARS:
                     res = collect_star(cr, page, pid, star, cfg["per_star"], cfg["post_per_star"], say)
                     box["stars"][star] = res
-                    say(f"    {star}점: 이전 {len(res['pre'])}/{cfg['per_star']}"
-                        + (f" · 이후 {len(res['post'])}/{cfg['post_per_star']}" if cfg["post_per_star"] else "")
-                        + (f"  (리뷰 {res['count']:,}개, " if res["count"] is not None else "  (")
-                        + f"요청 {res['requests']}회, {res['method']})")
+                    line = star_line(star, res, cfg["per_star"], bool(cfg["post_per_star"]))
+                    if line:
+                        say(line)
         except BaseException as e:  # Scrapling은 page_action 예외를 삼키므로 직접 보관
             box["error"] = e
         return page
@@ -957,11 +1174,22 @@ def process_item(cr: Any, session: Any, item: dict[str, str], cfg: dict[str, Any
         if not box["check"] and not box["stars"]:  # 리뷰를 하나도 못 받았으면 차단
             raise Blocked(f"상품 페이지 HTTP {status}")
         # 상품 페이지 응답만 403이고 리뷰 API는 정상이었던 경우: 받은 결과를 버리지 않는다
-        say(f"    (참고) 상품 페이지 응답은 {status}였지만 리뷰는 받아서 저장해요")
+        say(f"   (참고) 상품 페이지는 HTTP {status}였지만 리뷰는 정상으로 받아서 저장해요")
     collected_at = now_iso()
     rows = [to_record(r, pid, box["name"], item.get("category", ""), collected_at)
             for star in STARS for r in (box["stars"].get(star) or {}).get("pre", []) + (box["stars"].get(star) or {}).get("post", [])]
     check = {k: v for k, v in box["check"].items() if k != "has_old"}
+    if box["stars"]:  # 별점별로 무엇을 봤는지 남긴다 (나중에 다시 확인할지 판단용)
+        check["stars"] = {str(st): {k: res.get(k) for k in ("count", "method", "requests", "complete", "oldest_seen", "skipped_empty")}
+                          | {"pre": len(res["pre"]), "post": len(res["post"])}
+                          for st, res in sorted(box["stars"].items(), reverse=True)}
+    check["requests_total"] = (box["check"].get("requests") or 0) + sum(r.get("requests") or 0 for r in box["stars"].values())
+    check["seconds"] = round(time.time() - t0, 1)
+    if not any(r["period"] == "pre_chatgpt" for r in rows) and box["check"].get("has_old"):
+        seen = [res["oldest_seen"] for res in box["stars"].values() if res.get("oldest_seen")]
+        check["reason"] = box.get("stop_reason") or (
+            "별점별 목록을 다 봤지만 2022-11-30 이전 리뷰(본문 있는 것)가 없음"
+            + (f" · 본 리뷰 중 가장 오래된 {min(seen)}" if seen else ""))
     return {"name": box["name"], "check": check, "rows": rows}
 
 
@@ -1045,10 +1273,11 @@ def nap(rng: tuple[float, float]) -> None:
 
 
 def worker_main(wid: int, cfg: dict[str, Any], task_q: Any, result_q: Any, stop: Any, lock: Any, last: Any) -> None:
-    global _THROTTLE, _STOP, _PREFIX, _SLOT, CUTOFF, FALLBACK_PAGES, QUICK_SKIP
+    global _THROTTLE, _STOP, _PREFIX, _SLOT, CUTOFF, FALLBACK_PAGES, QUICK_SKIP, STOP_IF_NEW
     CUTOFF = date.fromisoformat(cfg["cutoff"])
     FALLBACK_PAGES = cfg.get("scan_pages", FALLBACK_PAGES)
     QUICK_SKIP = bool(cfg.get("quick_skip", QUICK_SKIP))
+    STOP_IF_NEW = bool(cfg.get("stop_if_new", STOP_IF_NEW))
     _THROTTLE, _STOP, _PREFIX = (lock, last, cfg["min_interval"]), stop, (f"[W{wid + 1}] " if cfg["workers"] > 1 else "")
     _SLOT = None if cfg.get("cdp_url") else (wid, cfg["workers"])  # 원격 Chrome 창은 옮기지 않는다
     session = None
@@ -1109,8 +1338,13 @@ def run_items(items: list[dict[str, str]], cfg: dict[str, Any], store: Store) ->
         task_q.put(it)
     for _ in range(workers):
         task_q.put(None)
-    mode = f"원격 Chrome {cfg['cdp_url']}" if cfg.get("cdp_url") else ("실제 Chrome" if cfg.get("real_chrome") else "내장 Chromium")
-    print(f"상품 {len(items)}개를 작업자 {workers}개로 수집해요 ({mode} · 요청 간격 최소 {cfg['min_interval']}초 · 저장: {store.path})")
+    mode = f"원격 Chrome ({cfg['cdp_url']})" if cfg.get("cdp_url") else ("실제 Chrome" if cfg.get("real_chrome") else "내장 Chromium")
+    if cfg.get("_round"):
+        print(f"\n🔁 다시 시작 · 남은 상품 {len(items):,}개", flush=True)
+    else:
+        print(f"\n수집 시작 · 상품 {len(items):,}개 · 브라우저 {workers}개 · {mode} · 요청 간격 최소 {cfg['min_interval']}초")
+        print(f"   저장 파일: {store.path}")
+        print("   별점 줄 읽는 법: 리뷰 = 그 별점 전체 리뷰 수 · 이전 = 모은 2022-11-30 이전 리뷰 / 목표 · ✓ = 목표 채움\n")
     if not cfg.get("cdp_url"):
         prepare_profiles(workers, bool(cfg.get("real_chrome")))
     procs = [ctx.Process(target=worker_main, args=(w, cfg, task_q, result_q, stop, lock, last), daemon=True) for w in range(workers)]
@@ -1118,6 +1352,15 @@ def run_items(items: list[dict[str, str]], cfg: dict[str, Any], store: Store) ->
         pr.start()
     alive, started, finished, ready = workers, 0, 0, 0
     totals: Counter[str] = Counter()
+    t_start = time.time()
+
+    def progress() -> str:
+        el = time.time() - t_start
+        eta = el / finished * (len(items) - finished) if finished else 0
+        return (f"── 진행 {finished:,}/{len(items):,} · 수집 {totals['collected']} · 건너뜀 {totals['no_old']}"
+                + (f" · 실패 {totals['error']}" if totals["error"] else "")
+                + f" · 이전 리뷰 {totals['reviews']:,}건 · 경과 {fmt_secs(el)}"
+                + (f" · 남은 예상 {fmt_secs(eta)}" if finished and finished < len(items) else "") + " ──")
     blocked = interrupted = False
     try:
         while alive:
@@ -1127,46 +1370,73 @@ def run_items(items: list[dict[str, str]], cfg: dict[str, Any], store: Store) ->
                 alive -= 1
             elif kind == "start":
                 started += 1
-                print(f"{tag}▶ [{started}/{len(items)}] {item['product_id']} {item.get('category') or ''} {item.get('name', '')[:30]}", flush=True)
+                print(f"\n{tag}▶ [{started:,}/{len(items):,}] {short(item.get('name') or '상품 ' + item['product_id'], 40)}"
+                      f"  ({item.get('category') or '분류 없음'} · {item['product_id']})", flush=True)
             elif kind == "done":
                 prod = store.put_product(item, {**payload, "worker": wid + 1})  # 상품 하나 끝날 때마다 바로 저장
                 finished += 1
-                n_pre = prod["counts"]["pre_chatgpt"]
+                rc = prod["review_count"]
+                n_pre = rc["pre_chatgpt"]
                 totals[prod["status"]] += 1
                 totals["reviews"] += n_pre
-                totals["post"] += prod["counts"]["post_chatgpt"]
+                totals["post"] += rc["post_chatgpt"]
                 why = prod["check"].get("reason", "")
+                cost = f"요청 {prod['check'].get('requests_total', 0)}회 · {fmt_secs(prod['check'].get('seconds') or 0)}"
+                if not item.get("name") and prod.get("name"):  # 목록에 이름이 없던 상품은 여기서 이름을 보여 준다
+                    cost += f" · {short(prod['name'], 40)}"
                 if n_pre:
-                    print(f"{tag}  ✓ {item['product_id']} 이전 리뷰 {n_pre}건 저장" + (f" ({why})" if why else ""), flush=True)
+                    stars = " ".join(f"{st}점 {rc['by_star'][str(st)]['total']}" for st in STARS if rc["by_star"][str(st)]["total"])
+                    print(f"{tag} ✓ 저장 {rc['total']}건 (이전 {n_pre}" + (f" · 이후 {rc['post_chatgpt']}" if rc["post_chatgpt"] else "")
+                          + f")  [{stars}]  · {cost}", flush=True)
                 else:
-                    print(f"{tag}  – {item['product_id']} 건너뜀: {why or '과거 리뷰 없음'}", flush=True)
+                    print(f"{tag} – 건너뜀: {why or '2022-11-30 이전 리뷰 없음'}  · {cost}", flush=True)
+                if finished % 10 == 0 and finished < len(items):
+                    print(f"\n{progress()}", flush=True)
             elif kind == "blocked":
                 blocked = True
-                print(f"{tag}⛔ 쿠팡이 자동 접근을 막았어요: {payload} → 모든 작업자를 멈추고 쉬었다가 이어서 해요.", flush=True)
+                print(f"\n{tag}⛔ 쿠팡이 막았어요 ({short_err(str(payload))}) → 모든 브라우저를 멈추고 쉬었다가 이어서 해요", flush=True)
             elif kind == "error":
                 totals["error"] += 1
-                print(f"{tag}  ⚠ {item['product_id']} 실패(다음 실행 때 다시 시도): {payload}", flush=True)
+                print(f"{tag} ⚠ 실패 → 다음 실행 때 다시 시도해요 ({short(str(payload), 90)})", flush=True)
             elif kind == "ready":
                 ready += 1
-                print(f"{tag}브라우저 준비됨 ({ready}/{workers}) · {payload}", flush=True)
+                print(f"{tag}브라우저 준비됨 ({ready}/{workers})" + (f" · {payload}" if ready == 1 else ""), flush=True)
             elif kind == "fatal":
-                print(f"{tag}⚠ 작업자를 시작하지 못했어요: {payload}", flush=True)
+                print(f"{tag}⚠ 브라우저를 열지 못했어요: {short(str(payload), 160)}", flush=True)
     except KeyboardInterrupt:
         interrupted = True
         stop.set()
-        print("\n중단 요청: 작업자를 멈춰요. 끝난 상품까지는 이미 저장돼 있어요.", flush=True)
+        print("\n중단 요청을 받았어요. 브라우저를 닫는 중… (끝난 상품까지는 이미 저장돼 있어요)", flush=True)
     finally:
         for pr in procs:
             pr.join(timeout=20)
             if pr.is_alive():
                 pr.terminate()
-    print(f"\n{'중단' if (blocked or interrupted) else '완료'}: 수집 {totals['collected']}개 상품·이전 리뷰 {totals['reviews']}건"
-          + (f"·이후 {totals['post']}건" if totals["post"] else "")
-          + f", 과거 리뷰 없어 건너뜀 {totals['no_old']}개" + (f", 실패 {totals['error']}개" if totals["error"] else "")
-          + f" → {store.path}")
+    acc = cfg.get("_acc")
+    if acc is not None:  # 차단 후 다시 돌리는 중이면 합계는 run_with_recovery가 마지막에 한 번 보여 준다
+        acc.update(totals)
+        acc["finished"] += finished
+        if blocked:
+            print(f"   여기까지 저장됨: 상품 {finished:,}개 확인 · 리뷰 {totals['reviews'] + totals['post']:,}건", flush=True)
+    else:
+        title = "완료" if not (blocked or interrupted) else ("중단 (쿠팡 차단)" if blocked else "중단 (직접 멈춤)")
+        print_summary(title, finished, totals, len(items) - finished, time.time() - t_start, store.path)
     if interrupted:
         return 130
     return 2 if blocked else 0
+
+
+def print_summary(title: str, finished: int, totals: Counter[str], remaining: int, elapsed: float, path: Path) -> None:
+    bar = "━" * 60
+    print(f"\n{bar}\n {title}")
+    print(f"   확인한 상품  {finished:,}개  (수집 {totals['collected']} · 건너뜀 {totals['no_old']}"
+          + (f" · 실패 {totals['error']}" if totals["error"] else "") + ")"
+          + (f"  · 남은 상품 {remaining:,}개" if remaining > 0 else ""))
+    print(f"   모은 리뷰    {totals['reviews'] + totals['post']:,}건  (2022-11-30 이전 {totals['reviews']:,}"
+          + (f" · 2023년 이후 {totals['post']:,}" if totals["post"] else "") + ")")
+    print(f"   걸린 시간    {fmt_secs(elapsed)}")
+    print(f"   저장 파일    {path}")
+    print(bar, flush=True)
 
 
 def cooldown(seconds: int, reason: str) -> None:
@@ -1182,20 +1452,35 @@ def run_with_recovery(items: list[dict[str, str]], cfg: dict[str, Any], store: S
     """run_items를 돌리고, 차단되면 쉬었다가 남은 상품으로 다시 돌린다."""
     rounds = cfg.get("block_rounds", len(BLOCK_COOLDOWNS))
     blocks = 0
+    acc: Counter[str] = Counter()
+    t0 = time.time()
+
+    def finish(code: int, title: str) -> int:
+        left = sum(1 for it in items if not store.is_done(it["product_id"]))
+        print_summary(title, acc["finished"], acc, left, time.time() - t0, store.path)
+        if code == 2:
+            print("   몇 시간 뒤 같은 명령을 다시 실행하면 끝난 상품은 건너뛰고 이어서 해요.")
+        return code
+
     while True:
         todo = [it for it in items if not store.is_done(it["product_id"])]
-        code = run_items(todo, cfg, store)
-        if code != 2:
-            return code
+        if not todo and blocks == 0:
+            print("새로 확인할 상품이 없어요.")
+            return 0
+        code = run_items(todo, {**cfg, "_acc": acc, "_round": blocks}, store)
+        if code == 0:
+            return finish(0, "완료")
+        if code == 130:
+            return finish(130, "중단 (직접 멈춤)")
         blocks += 1
         if blocks > rounds:
-            print(f"   {rounds}번 쉬어도 계속 막혀서 멈춰요. 몇 시간 뒤 같은 명령을 다시 실행하면 이어서 해요.")
-            return 2
+            print(f"\n⛔ {rounds}번 쉬어도 계속 막혀서 멈춰요.")
+            return finish(2, "중단 (쿠팡 차단)")
         try:
             cooldown(BLOCK_COOLDOWNS[min(blocks - 1, len(BLOCK_COOLDOWNS) - 1)], f"차단 {blocks}번째")
         except KeyboardInterrupt:
-            print("\n중단했어요. 끝난 상품까지는 저장돼 있어요.")
-            return 130
+            print("\n쉬는 중에 멈췄어요.")
+            return finish(130, "중단 (직접 멈춤)")
         if blocks >= 2 and not cfg.get("cdp_url"):
             reset_profiles(cfg.get("workers", 1), bool(cfg.get("real_chrome")))
 
@@ -1276,7 +1561,7 @@ def cmd_category(args: argparse.Namespace) -> int:
 
 def scan_cfg(args: argparse.Namespace) -> dict[str, Any]:
     return {"page_size": getattr(args, "page_size", 10), "scan_pages": getattr(args, "scan_pages", FALLBACK_PAGES),
-            "quick_skip": getattr(args, "quick_skip", False)}
+            "quick_skip": getattr(args, "quick_skip", False), "stop_if_new": getattr(args, "stop_if_new", False)}
 
 
 def browser_cfg(args: argparse.Namespace) -> dict[str, Any]:
@@ -1429,6 +1714,22 @@ def print_table(title: str, counts: Counter[tuple[int, str]]) -> None:
     print("  합계 " + "".join(f"{v:>8,}" for v in tot) + f"{sum(tot):>9,}")
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    """학습 코드용: 리뷰를 한 줄에 하나씩, 리뷰마다 모든 정보를 담아 펼친다(MODEL_DEV.md 4.12.1 형식)."""
+    out_dir = Path(args.out) if args.out else OUT_DIR
+    store = Store(out_dir)
+    path = Path(args.file) if args.file else out_dir / EXPORT_NAME
+    rows = [r for r in store.reviews() if args.period == "all" or r["period"] == args.period]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    os.replace(tmp, path)
+    print(f"리뷰 {len(rows):,}건 → {path}")
+    return 0
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     out_dir = Path(args.out) if args.out else OUT_DIR
     store = Store(out_dir)
@@ -1502,6 +1803,9 @@ def main(argv: list[str] | None = None) -> int:
     n = sub.add_parser("naver", help="네이버 쇼핑 리뷰 20만 건 내려받기·변환")
     n.add_argument("--force", action="store_true", help="이미 받은 파일이 있어도 다시 받기")
     sub.add_parser("stats", help="모인 데이터 양 보기")
+    ex = sub.add_parser("export", help="학습 코드용으로 리뷰를 한 줄에 하나씩 펼친 jsonl 만들기")
+    ex.add_argument("--file", default="", help=f"저장할 파일 (기본 결과 폴더/{EXPORT_NAME})")
+    ex.add_argument("--period", choices=("all", "pre_chatgpt", "post_chatgpt"), default="all", help="시기 고르기 (기본 전부)")
     ch = sub.add_parser("chrome", help="원격 연결용으로 Mac의 Chrome을 전용 프로필로 띄우기")
     ch.add_argument("--port", type=int, default=CDP_PORT, help=f"원격 디버깅 포트 (기본 {CDP_PORT})")
     ch.add_argument("--profile", default=str(CDP_PROFILE), help=f"전용 Chrome 프로필 폴더 (기본 {CDP_PROFILE})")
@@ -1510,8 +1814,11 @@ def main(argv: list[str] | None = None) -> int:
                        help="한 번에 받는 리뷰 수 (기본 10 = 쿠팡 화면과 같음. 50을 받아 주면 같은 1,500개를 더 적은 요청으로 봄)")
     for p in (c, g):
         p.add_argument("--scan-pages", type=int, default=FALLBACK_PAGES,
-                       help=f"날짜가 섞여 나오는 별점 목록에서 1,500개 안을 훑어볼 최대 페이지 (기본 {FALLBACK_PAGES})")
+                       help="날짜가 섞여 나오는 별점 목록에서 훑어볼 최대 페이지 (기본 0 = 끝까지, 1,500개 전부)")
         p.add_argument("--recheck-no-old", action="store_true", help="이전에 '과거 리뷰 없음'으로 끝난 상품도 다시 확인")
+    g.add_argument("--stop-if-new", action="store_true",
+                   help="끝까지 본 별점 목록(리뷰 20개 이상)의 가장 오래된 리뷰가 2023-05-29 이후면 "
+                        "2023년 이후 판매 시작으로 보고 나머지 별점은 건너뜀 (요청이 크게 줄지만 드물게 놓칠 수 있음)")
     g.add_argument("--quick-skip", action="store_true",
                    help="리뷰 1,500개 초과 상품도 전체 목록 1,500번째 리뷰가 2022-11-30 이후면 바로 건너뜀 "
                         "(빠르지만 1~4점 목록에만 남은 과거 리뷰를 놓침)")
@@ -1522,12 +1829,13 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--workers", type=int, default=1, help=f"동시에 띄울 브라우저 수 (기본 1, 최대 {MAX_WORKERS}, 권장 2~3)")
         p.add_argument("--min-interval", type=float, default=MIN_INTERVAL,
                        help=f"모든 브라우저를 합친 요청 사이 최소 간격(초, 기본 {MIN_INTERVAL})")
-    for p in (c, g, n, sub.choices["stats"]):
+    for p in (c, g, n, sub.choices["stats"], sub.choices["export"]):
         p.add_argument("--out", default="", help="결과 폴더 (기본 model/data/raw/…)")
     for p in sub.choices.values():  # --cutoff는 명령 앞·뒤 어디에 써도 된다
         p.add_argument("--cutoff", dest="cutoff_sub", default=None, help="사람 리뷰 기준일 (기본 2022-11-30)")
     ap.add_argument("--cutoff", default=CUTOFF.isoformat(), help="사람 리뷰 기준일 (기본 2022-11-30)")
     cmds = {"collect": cmd_collect, "category": cmd_category, "inspect": cmd_inspect, "naver": cmd_naver, "stats": cmd_stats,
+            "export": cmd_export,
             "chrome": cmd_chrome}
     # 명령 앞에 --를 붙여 쓴 경우(--category)도 받아 준다
     raw = list(sys.argv[1:] if argv is None else argv)

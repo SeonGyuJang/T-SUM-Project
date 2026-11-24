@@ -17,17 +17,19 @@
 - 실제로 답한 모델명을 model_version 칸에 적습니다. 거절·오류는 api_note 칸에 적고 다음 행으로 넘어갑니다.
 - 몇 건마다 작업표에 바로 저장합니다. 중간에 끊겨도(Ctrl+C 포함) 다시 실행하면 빈 칸만 이어서 채웁니다.
   거절·오류로 넘어간 행까지 다시 시도하려면 --retry-failed.
-- 요청 한도(429)·서버 오류(5xx)는 기다렸다 다시 시도하고, 키·모델명 오류(401·403·404·400)는 바로 멈춥니다.
+- 요청 한도(429)를 받으면 그 모델만 속도를 줄이고 서버가 알려 준 시간만큼 쉰 뒤 이어서 합니다(--rpm 으로 처음부터 제한 가능).
+  하루 한도를 다 쓰면 그 모델은 이번 실행에서 뺍니다. 서버 혼잡(503·504)이 이어지는 모델도 뺍니다(--reassign-busy 면 다른 모델이 대신).
+- 키·모델명 오류(401·403·404·400)는 바로 멈춥니다.
 """
 import argparse
 import csv
 import os
 import re
 import sys
+import queue
 import threading
 import time
-from collections import Counter
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from collections import Counter, deque
 
 PROVIDER_OF = {"chatgpt": "openai", "gpt": "openai", "openai": "openai", "claude": "anthropic", "gemini": "google"}
 DEFAULT_MODELS = {"anthropic": ["claude-opus-5-5"]}  # OpenAI·Gemini는 쓸 모델을 --models 로 직접 정합니다
@@ -68,6 +70,26 @@ def looks_refused(text):
 class FakeBusy(Exception):
     """테스트용: 서버 혼잡(503)."""
     status_code = 503
+
+
+class FakeRateLimit(Exception):
+    """테스트용: 요청 한도(429)."""
+    status_code = 429
+
+
+_fake_calls = deque()
+_fake_lock = threading.Lock()
+
+
+def fake_rate_check(per_s=2, delay="0.2"):
+    """테스트용 'limited-model': 1초에 per_s건을 넘으면 429."""
+    with _fake_lock:
+        now = time.time()
+        while _fake_calls and now - _fake_calls[0] > 1:
+            _fake_calls.popleft()
+        if len(_fake_calls) >= per_s:
+            raise FakeRateLimit(f"429 RESOURCE_EXHAUSTED. You exceeded your current quota. Please retry in {delay}s.")
+        _fake_calls.append(now)
 
 
 class Fatal(Exception):
@@ -119,6 +141,10 @@ class Caller:
         if self.provider == "fake":  # 테스트용
             if model == "busy-model":
                 raise FakeBusy()
+            if model == "daily-model":
+                raise FakeRateLimit("429 RESOURCE_EXHAUSTED. quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier")
+            if model == "limited-model":
+                fake_rate_check()
             if "말로 거절" in prompt:
                 return "이 요청은 가짜 리뷰를 만드는 일이라 도와드리기 어렵습니다.", model, ""
             if "거절" in prompt:
@@ -211,21 +237,95 @@ def retryable(e):
     return any(k in name for k in ("connection", "timeout", "timedout", "servererror", "unavailable"))
 
 
-def call_with_retry(caller, model, prompt, tries=3, log=print, tag=""):
-    """SDK 자체 재시도 뒤에도 429·5xx·연결 오류면 조금 더 기다렸다 다시. 그 밖의 오류는 Fatal(전체 중단)."""
-    for attempt in range(tries):
-        try:
-            return caller(model, prompt)
-        except Exception as e:
-            if not retryable(e):
-                raise Fatal(describe(e)) from e
-            if attempt == tries - 1:
-                log(f"  ✗ {tag} {describe(e)[:160]} → 건너뜀")
-                return None, model, f"error({status_of(e) or type(e).__name__})"
-            wait_s = min(60, RETRY_BASE_S * 2 ** attempt)
-            log(f"  ↻ {tag} {describe(e)[:120]} → {wait_s}초 뒤 다시")
-            time.sleep(wait_s)
-    return None, model, "error"
+def retry_delay(e, default=30.0):
+    """서버가 알려 준 대기 시간: retry-after 헤더, 또는 본문의 'retry in 37.2s' / retryDelay: '37s'."""
+    headers = getattr(getattr(e, "response", None), "headers", None)
+    try:
+        v = headers.get("retry-after") if headers is not None else None
+        if v:
+            return max(1.0, float(v))
+    except (TypeError, ValueError):
+        pass
+    text = str(e)
+    m = re.search(r"retry in\s*([\d.]+)\s*s", text, re.I) or re.search(r"retryDelay['\"]?\s*[:=]\s*['\"]?([\d.]+)\s*s", text)
+    return float(m.group(1)) if m else default
+
+
+def is_daily_quota(e):
+    return bool(re.search(r"PerDay|per\s*day|daily", str(e), re.I))
+
+
+def attempt(caller, model, prompt):
+    """요청 한 번 → (종류, 값).
+    ("ok", (text, served, note)) · ("rate", 대기초) · ("daily", None) · ("busy", 코드) · ("neterr", 설명). 그 밖의 오류는 Fatal."""
+    try:
+        return "ok", caller(model, prompt)
+    except Exception as e:
+        code = status_of(e)
+        if code == 429:
+            return ("daily", None) if is_daily_quota(e) else ("rate", retry_delay(e))
+        if code is not None and (code >= 500 or code in (408, 409)):
+            return "busy", code
+        if code is None and retryable(e):
+            return "neterr", describe(e)
+        raise Fatal(describe(e)) from e
+
+
+class Gate:
+    """모델 하나의 요청 속도 조절. 429를 받으면 속도를 절반으로 줄이고 서버가 말한 시간만큼 쉰다.
+    한동안 429가 없으면 조금씩 다시 올린다(사용자가 --rpm 으로 정한 상한은 넘지 않음)."""
+
+    def __init__(self, rpm=None):
+        self.min_interval = 60.0 / rpm if rpm else 0.0
+        self.interval = self.min_interval
+        self.next_at = 0.0
+        self.ok_since_penalty = 0
+        self.quiet_until = 0.0  # 이 시각 전에 온 429는 이미 줄인 속도로 보낸 요청이 아니므로 또 줄이지 않음
+        self.recent = deque()  # 최근 60초 요청 시각 (지금 속도를 재려고)
+        self.lock = threading.Lock()
+
+    def wait(self, stop):
+        with self.lock:
+            now = time.time()
+            t = max(now, self.next_at)
+            self.next_at = t + self.interval
+        while not stop.is_set():
+            left = t - time.time()
+            if left <= 0:
+                break
+            time.sleep(min(left, 0.5))
+        with self.lock:
+            now = time.time()
+            self.recent.append(now)
+            while self.recent and now - self.recent[0] > 60:
+                self.recent.popleft()
+
+    def rpm_now(self):
+        return 60.0 / self.interval if self.interval else float(len(self.recent))
+
+    def on_rate_limit(self, delay):
+        """반환: 이번에 속도를 새로 줄였으면 (쉴 초, 새 분당 건수). 같은 순간에 여러 요청이 429를 받아도 한 번만 줄인다."""
+        with self.lock:
+            now = time.time()
+            self.next_at = max(self.next_at, now + delay)
+            if now < self.quiet_until:  # 속도를 줄이기 전에 이미 보낸 요청들이 받은 429
+                return None
+            self.quiet_until = now + delay + 1.0
+            self.ok_since_penalty = 0
+            if self.recent:  # 최근 요청 수 ÷ 그 시간 = 지금 분당 속도 (막 시작했을 때도 맞게 최소 1초로 나눔)
+                current = len(self.recent) * 60.0 / max(1.0, now - self.recent[0])
+            else:
+                current = 60.0 / max(self.interval, 1.0)
+            new_rpm = max(1.0, current * 0.5)
+            self.interval = max(self.min_interval, 60.0 / new_rpm, self.interval * 2 if self.interval else 0)
+            return delay, 60.0 / self.interval
+
+    def on_ok(self):
+        with self.lock:
+            self.ok_since_penalty += 1
+            if self.interval > self.min_interval and self.ok_since_penalty >= 20:  # 20건 연속 성공 → 15% 빠르게
+                self.interval = max(self.min_interval, self.interval * 0.85)
+                self.ok_since_penalty = 0
 
 
 def hint(provider):
@@ -269,9 +369,11 @@ def main():
                     help="모델마다 동시 요청 수 (요청 한도에 걸리면 줄이세요). 느린 모델이 빠른 모델을 막지 않게 모델별로 따로 셈")
     ap.add_argument("--save-every", type=int, default=10)
     ap.add_argument("--retry-failed", action="store_true", help="거절·오류로 넘어간 행(api_note 있음)도 다시 시도")
-    ap.add_argument("--max-errors", type=int, default=20, help="오류가 이만큼 연달아 나면 멈춤")
+    ap.add_argument("--max-errors", type=int, default=20, help="연결 오류가 이만큼 연달아 나면 멈춤")
     ap.add_argument("--thinking", choices=["low", "default"], default="low",
                     help="Gemini의 '생각' 단계: low(기본, 빠름) / default(모델 기본값, 느림). Claude는 늘 effort low")
+    ap.add_argument("--rpm", type=float, default=None,
+                    help="모델마다 분당 최대 요청 수 (예: 무료 Gemini 키면 10). 안 주면 429가 올 때 자동으로 줄임")
     ap.add_argument("--reassign-busy", action="store_true",
                     help="붐벼서 멈춘 모델이 맡은 행을 지금 되는 다른 모델이 대신 채움 (모델 비율은 달라짐)")
     ap.add_argument("--busy-limit", type=int, default=2, help="한 모델이 붐빔(503·429·504)으로 이만큼 연달아 실패하면 이번 실행에서 그 모델은 건너뜀")
@@ -342,7 +444,7 @@ def main():
         else:
             r["api_note"] = note
             stats[note.split("(")[0]] += 1
-            state["streak"] = state["streak"] + 1 if note.startswith("error") and note not in BUSY_NOTES else 0
+            state["streak"] = state["streak"] + 1 if note == "error(conn)" else 0  # 연결 오류만 셈
         state["since_save"] += 1
         if state["since_save"] >= args.save_every:
             save(args.csv, fieldnames, rows)
@@ -353,9 +455,41 @@ def main():
     busy_streak, paused, inflight = Counter(), set(), Counter()
     plock = threading.Lock()
 
+    gates = {m: Gate(args.rpm) for m in models}
+
+    def run_one(m, i, tag_print=True):
+        """행 i를 모델 m으로: 요청 한도(429)는 속도를 줄여 가며 차례를 기다려 다시(한 행에 최대 15분),
+        혼잡(5xx)·연결 오류는 1번 더. → (text, served, note)"""
+        busy_tries = 0
+        started = time.time()
+        while True:
+            gates[m].wait(stop)
+            if stop.is_set():
+                return None, m, "skipped"
+            kind, val = attempt(caller, m, rows[i]["prompt"])
+            if kind == "ok":
+                gates[m].on_ok()
+                return val
+            if kind == "daily":
+                return None, m, "quota_day"
+            if kind == "rate":
+                changed = gates[m].on_rate_limit(val)
+                if changed:
+                    print(f"  ⏳ {m} 요청 한도(429) → {max(1, round(changed[0]))}초 쉬고 분당 약 {changed[1]:.0f}건으로 줄여요", flush=True)
+                if time.time() - started > 15 * 60:  # 15분 동안 한 번도 못 보냈으면 이 행은 나중에
+                    return None, m, "error(429)"
+                continue
+            busy_tries += 1
+            code = val if kind == "busy" else "conn"
+            if busy_tries >= 2:
+                if kind == "neterr" and tag_print:
+                    print(f"  ✗ {rows[i]['task_id']} {m} 연결 오류: {val[:150]}", flush=True)
+                return None, m, f"error({code})"
+            time.sleep(RETRY_BASE_S)
+
     # 1) 모델마다 첫 행을 하나씩 먼저 보내 본다: 키·모델명·네트워크 문제를 바로 보여 주고,
-    #    붐비는 모델은 이번 실행에서 빼고 나머지 모델로 계속한다(전부 붐빌 때만 멈춤)
-    ok_models, idle = [], []
+    #    붐비거나 오늘 한도를 다 쓴 모델은 이번 실행에서 빼고 나머지 모델로 계속한다(전부 안 될 때만 멈춤)
+    ok_models, idle, pre_paused = [], [], {}
     for m in models:
         mine = [i for i in todo if models[i % len(models)] == m]
         if not mine:
@@ -366,7 +500,7 @@ def main():
         print(f"  시험 요청… ({m}, 최대 {TIMEOUT_S}초)", flush=True)
         t1 = time.time()
         try:
-            text, served_model, note = call_with_retry(caller, m, rows[first]["prompt"], tries=2, tag=rows[first]["task_id"])
+            text, served_model, note = run_one(m, first)
         except Fatal as e:
             if "(404)" in str(e) or "NOT_FOUND" in str(e):
                 sys.exit(f"  ✗ 시험 요청 실패: {e}\n→ 키는 정상이에요. 모델 {m} 을(를) 이 계정에서 쓸 수 없어요(이름이 틀렸거나, 신규 사용자에게 막힌 모델).\n"
@@ -377,104 +511,167 @@ def main():
             sys.exit("\n중단했어요.")
         record(first, text, served_model, note)
         save(args.csv, fieldnames, rows)
-        if note in BUSY_NOTES:  # 서버 혼잡·요청 한도: 이 모델만 이번 실행에서 뺀다
-            paused.add(m)
-            print(f"  ⏸ {m} 서버가 지금 붐벼서({note}) 이번 실행에서는 이 모델 행을 건너뜁니다. 나중에 --retry-failed 로 채우세요.",
-                  flush=True)
+        if note == "quota_day" or note in BUSY_NOTES:
+            pre_paused[m] = "하루 한도 소진" if note == "quota_day" else f"서버가 지금 붐벼요({note})"
             continue
         if note.startswith("error"):  # 연결이 안 되면 나머지를 보내 봐야 똑같다 → 진단을 보여 주고 멈춤
             sys.exit(f"  ✗ 시험 요청이 {note}로 실패해서 멈춥니다. 위 '원인'을 보세요.\n{network_hint(caller)}")
         ok_models.append(m)
         shown = (text or note or "")[:60].replace("\n", " ")
         print(f"  ✓ {time.time() - t1:.1f}초 · {served_model} · {shown!r}", flush=True)
-    if args.reassign_busy and paused:
+    if args.reassign_busy and pre_paused:
         ok_models += idle
-    if not ok_models and paused:
-        sys.exit(f"  ✗ 모든 모델({', '.join(models)})이 지금 붐벼요. 몇 분~몇십 분 뒤 같은 명령으로 다시 실행하세요.")
+    if not ok_models and pre_paused:
+        sys.exit(f"  ✗ 모든 모델({', '.join(models)})을 지금 쓸 수 없어요(붐빔·하루 한도). 나중에 같은 명령으로 다시 실행하세요.")
 
-    # 2) 나머지는 동시에
-    def work(i):
-        if stop.is_set():
-            return i, None, None, "skipped"
-        model = models[i % len(models)]  # 행 번호로 번갈아 → 다시 실행해도 같은 행은 같은 모델
-        if model in paused:
-            alive = [m for m in ok_models if m not in paused]
-            if not (args.reassign_busy and alive):
-                return i, None, model, f"busy({model})"
-            model = alive[i % len(alive)]  # 붐비는 모델 몫을 지금 되는 모델이 대신 맡음
-        with plock:
-            inflight[model] += 1
-        try:
-            tries = 1 if busy_streak[model] else 3  # 이미 붐비는 중이면 재시도로 시간을 쓰지 않는다
-            res = call_with_retry(caller, model, rows[i]["prompt"], tries=tries, tag=rows[i]["task_id"])
-        except Fatal as e:
-            stop.set()
-            state["fatal"] = str(e)
-            return i, None, model, "fatal"
-        finally:
+    # 2) 나머지는 동시에: 모델마다 대기열과 작업자(--concurrency)를 따로 둔다.
+    #    느리거나 붐비는 모델이 다른 모델을 막지 않고, 요청 속도는 모델별 Gate가 조절한다.
+    queues = {m: deque() for m in models}
+    qlock = threading.Lock()
+    results = queue.Queue()
+    for i in todo:
+        queues[models[i % len(models)]].append(i)
+    total = len(todo)
+
+    def alive_models():
+        return [m for m in ok_models if m not in paused]
+
+    def pause(m, why):
+        """모델 m을 이번 실행에서 뺀다. --reassign-busy면 남은 행을 다른 모델 대기열로 옮기고, 아니면 건너뜀으로 기록."""
+        with qlock:
+            if m in paused:
+                return
+            paused.add(m)
+            left = list(queues[m])
+            queues[m].clear()
+            alive = alive_models()
+            if args.reassign_busy and alive:
+                for k, i in enumerate(left):
+                    queues[alive[k % len(alive)]].append(i)
+                print(f"  ⏸ {m}: {why} → 남은 {len(left)}행을 {', '.join(alive)} 이(가) 대신 채워요.", flush=True)
+            else:
+                for i in left:
+                    results.put((i, None, m, f"busy({m})" if why != "하루 한도 소진" else "quota_day"))
+                print(f"  ⏸ {m}: {why} → 이번 실행에서 이 모델 행 {len(left)}건은 건너뜁니다(나중에 --retry-failed).", flush=True)
+
+    # 시험 요청에서 안 된 모델의 몫 처리
+    for m, why in pre_paused.items():
+        pause(m, why)
+
+    def worker(m):
+        while not stop.is_set():
+            with qlock:
+                if m in paused or not queues[m]:
+                    return
+                i = queues[m].popleft()
             with plock:
-                inflight[model] -= 1
-        note = res[2]
-        with plock:
-            if note in BUSY_NOTES:
-                busy_streak[model] += 1
-                if busy_streak[model] >= args.busy_limit and model not in paused:
-                    paused.add(model)
-                    print(f"  ⏸ {model} 이(가) 계속 붐벼서(503·429·504) 이번 실행에서는 이 모델 행을 건너뜁니다."
-                          f" 다른 모델은 계속해요. 나중에 --retry-failed 로 채우세요.", flush=True)
-            elif res[0]:
-                busy_streak[model] = 0
-        return (i, *res)
+                inflight[m] += 1
+            try:
+                text, served_model, note = run_one(m, i)
+            except Fatal as e:
+                stop.set()
+                state["fatal"] = str(e)
+                return
+            finally:
+                with plock:
+                    inflight[m] -= 1
+            if note == "skipped":
+                return
+            if note == "quota_day":
+                results.put((i, None, m, note))
+                pause(m, "하루 한도 소진")
+                continue
+            with plock:
+                if note in BUSY_NOTES and note != "error(429)":
+                    busy_streak[m] += 1
+                elif text:
+                    busy_streak[m] = 0
+                hit = busy_streak[m] >= args.busy_limit
+            results.put((i, text, served_model, note))
+            if hit:
+                pause(m, "서버가 계속 붐벼요(503·504)")
+
+    threads = []  # (모델, 스레드)
+
+    def spawn(m):
+        th = threading.Thread(target=worker, args=(m,), daemon=True)
+        th.start()
+        threads.append((m, th))
+
+    for m in models:
+        if m not in paused:
+            for _ in range(max(1, args.concurrency)):
+                spawn(m)
+
+    def respawn():
+        """다른 모델 몫을 넘겨받은 모델의 작업자가 이미 끝났으면 다시 띄운다."""
+        for m in alive_models():
+            with qlock:
+                pending_m = len(queues[m])
+            running = sum(1 for mm, th in threads if mm == m and th.is_alive())
+            for _ in range(min(pending_m, max(1, args.concurrency)) - running):
+                spawn(m)
 
     t0 = time.time()
-    total = len(todo)
     n = 0
-    # 모델마다 실행기를 따로 둔다: 느리거나 붐비는 모델이 요청 자리를 붙잡아도 다른 모델은 제 속도로 진행
-    executors = {m: ThreadPoolExecutor(max_workers=max(1, args.concurrency)) for m in models}
+    last_beat = time.time()
     interrupted = False
     try:
-        pending = {executors[models[i % len(models)]].submit(work, i) for i in todo}
-        while pending:
-            finished, pending = wait(pending, timeout=15, return_when=FIRST_COMPLETED)
-            if not finished:  # 15초 동안 하나도 안 끝남 → 살아 있다고 알림
-                with plock:
-                    busy_now = ", ".join(f"{m} {c}" for m, c in inflight.items() if c)
-                print(f"  … 응답 기다리는 중 ({n:,}/{total:,} 완료, 경과 {time.time() - t0:.0f}초"
-                      + (f" · 진행 중: {busy_now}" if busy_now else "") + ")", flush=True)
+        while n < total and not stop.is_set():
+            try:
+                i, text, model, note = results.get(timeout=1)
+            except queue.Empty:
+                respawn()
+                if not any(th.is_alive() for _, th in threads) and results.empty():
+                    with qlock:
+                        left_q = sum(len(q) for q in queues.values())
+                    if not left_q:
+                        break
+                if time.time() - last_beat >= 15:
+                    last_beat = time.time()
+                    with plock:
+                        busy_now = ", ".join(f"{m} {c}" for m, c in inflight.items() if c)
+                    speeds = ", ".join(f"{m} 분당≤{gates[m].rpm_now():.0f}" for m in alive_models() if gates[m].interval)
+                    print(f"  … 진행 중 ({n:,}/{total:,} 완료, 경과 {time.time() - t0:.0f}초"
+                          + (f" · 요청 중: {busy_now}" if busy_now else "") + (f" · 속도 제한: {speeds}" if speeds else "") + ")",
+                          flush=True)
                 continue
-            for fut in finished:
-                i, text, model, note = fut.result()
-                if note in ("skipped", "fatal"):
-                    continue
-                n += 1
-                record(i, text, model, note)
-                if note.startswith("busy("):
-                    state["streak"] = 0  # 멈춘 모델 건너뛰기는 '연속 오류'로 세지 않음
-                if n <= 3 or n % 10 == 0 or n == total:
-                    rate = n / max(1e-9, time.time() - t0)
-                    print(f"  {n:,}/{total:,} · {dict(stats)} · {rate * 60:.0f}건/분", flush=True)
-                if state["streak"] >= args.max_errors and not stop.is_set():
-                    print(f"  ⚠ 오류가 {state['streak']}번 연달아 나서 멈춥니다(네트워크·요청 한도 확인). 다시 실행하면 이어서 해요.")
-                    stop.set()
-            if stop.is_set():
-                for f in pending:
-                    f.cancel()
+            n += 1
+            record(i, text, model, note)
+            if note.startswith("busy(") or note == "quota_day":
+                state["streak"] = 0  # 모델 건너뛰기는 '연속 오류'로 세지 않음
+            if n <= 3 or n % 20 == 0 or n == total:
+                rate = n / max(1e-9, time.time() - t0)
+                print(f"  {n:,}/{total:,} · {dict(stats)} · {rate * 60:.0f}건/분", flush=True)
+                last_beat = time.time()
+            if state["streak"] >= args.max_errors and not stop.is_set():
+                print(f"  ⚠ 연결 오류가 {state['streak']}번 연달아 나서 멈춥니다(인터넷 확인). 다시 실행하면 이어서 해요.")
+                stop.set()
     except KeyboardInterrupt:
         stop.set()
         interrupted = True
         print("\n중단했어요. 지금까지 받은 답을 저장하고 바로 끝냅니다(보내 둔 요청의 답은 버림)…", flush=True)
     finally:
-        for ex in executors.values():
-            ex.shutdown(wait=not interrupted, cancel_futures=True)  # 아직 시작 안 한 요청은 버림
+        stop.set()
+        while True:  # 이미 도착한 결과는 버리지 않고 기록
+            try:
+                i, text, model, note = results.get_nowait()
+            except queue.Empty:
+                break
+            if note != "skipped":
+                record(i, text, model, note)
         save(args.csv, fieldnames, rows)
     if interrupted:  # 진행 중인 요청(최대 120초)을 기다리지 않고 바로 종료
         print(f"저장 → {args.csv} · 이번에 {dict(stats)} · 같은 명령으로 다시 실행하면 이어서 해요.", flush=True)
         os._exit(130)
 
     if paused:
-        skipped_busy = sum(1 for r in rows if (r.get("api_note") or "").startswith(("busy(", "error(5", "error(429")))
-        print(f"\n  ⏸ 붐벼서 건너뛴 모델: {sorted(paused)} · 건너뛴 행 {skipped_busy:,}건 → 나중에 같은 명령에 --retry-failed"
+        skipped_busy = sum(1 for r in rows if not (r.get("text") or "").strip()
+                           and (r.get("api_note") or "").startswith(("busy(", "error(5", "error(429", "quota_day")))
+        print(f"\n  ⏸ 이번 실행에서 뺀 모델: {sorted(paused)} · 그 때문에 비어 있는 행 {skipped_busy:,}건 → 나중에 같은 명령에 --retry-failed"
               + ("" if args.reassign_busy else "  (기다리기 싫으면 --retry-failed --reassign-busy: 다른 모델이 대신 채움)"))
+    if any((r.get("api_note") or "") == "quota_day" for r in rows):
+        print("  · 'quota_day' = 그 모델의 하루 요청 한도를 다 쓴 것. 한도는 보통 하루 단위로 초기화돼요(무료 키는 한도가 낮음).")
     left = sum(1 for r in rows if not (r.get("text") or "").strip())
     print(f"\n저장 → {args.csv} · 이번에 {dict(stats)} · 실제 답한 모델 {dict(served)} · 남은 빈 칸 {left:,}")
     if state["fatal"]:

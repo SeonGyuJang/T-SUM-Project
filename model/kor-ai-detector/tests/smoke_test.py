@@ -326,7 +326,30 @@ def test_fill_ai_tasks():
         assert all(r["text"] for r in ok), ok                                         # 다른 모델은 끝까지 채움
         assert not any(r["text"] for r in busy) and all(r["api_note"] for r in busy)  # 붐비는 모델 행은 기록만
         assert "⏸ busy-model" in out and "--retry-failed" in out, out
-    print("✓ fill_ai_tasks(빈 칸만 채우기·모델 번갈아·거절 기록·이어서 하기·붐비는 모델 건너뛰기)")
+    # 요청 한도(429): 속도를 줄여 결국 모두 채움 / 하루 한도 소진 모델은 빼고 다른 모델이 대신
+    with tempfile.TemporaryDirectory() as d:
+        def sheet(name, n):
+            path = os.path.join(d, name)
+            with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["task_id", "generator", "product_id", "prompt", "text"])
+                for i in range(n):
+                    w.writerow([f"gemini-{i:05d}", "gemini", f"p{i}", f"리뷰 써 줘 {i}", ""])
+            return path
+        os.environ["FILL_RETRY_BASE_S"] = "0.01"
+        try:
+            lim = sheet("lim.csv", 10)
+            out = run("fill_ai_tasks.py", lim, "--provider", "fake", "--models", "limited-model")
+            rows = list(csv.DictReader(open(lim, encoding="utf-8-sig")))
+            assert all(r["text"] for r in rows), (out, rows)                          # 429가 와도 빠짐없이
+            day = sheet("day.csv", 8)
+            out = run("fill_ai_tasks.py", day, "--provider", "fake", "--models", "daily-model", "ok-model", "--reassign-busy")
+            rows = list(csv.DictReader(open(day, encoding="utf-8-sig")))
+            assert rows[0]["api_note"] == "quota_day" and all(r["text"] for r in rows[1:]), (out, rows)
+            assert {r["model_version"] for r in rows[1:]} == {"ok-model"} and "하루 한도" in out
+        finally:
+            os.environ.pop("FILL_RETRY_BASE_S", None)
+    print("✓ fill_ai_tasks(빈 칸만 채우기·모델 번갈아·거절 기록·이어서 하기·붐비는 모델 건너뛰기·요청 한도·하루 한도)")
 
 
 

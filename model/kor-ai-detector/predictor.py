@@ -18,6 +18,8 @@ import re
 import unicodedata
 
 ZERO_WIDTH = re.compile("[​‌‍⁠﻿]")
+# 서비스(realstar_model.preprocess._SPACES)와 같은 공백 문자: 스페이스·탭·\f·\v·줄바꿈 없는 공백(U+00A0)
+SPACE_RUN = re.compile("[ \t\f\v\u00a0]+")
 MIN_CHARS = 20
 
 
@@ -68,6 +70,7 @@ class Predictor:
         cfg_path = os.path.join(model_dir, "train_config.json")
         self.train_config = json.load(open(cfg_path, encoding="utf-8")) if os.path.exists(cfg_path) else {}
         self.newlines = self.train_config.get("preprocess", {}).get("newlines", "keep")
+        self.spaces = self.train_config.get("preprocess", {}).get("spaces", "keep")
         self.max_len = max_len or int(self.train_config.get("max_len") or self.train_config.get("args", {}).get("max_len", 256))
         self.bs = batch_size
         self.device = pick_device(device)
@@ -82,10 +85,12 @@ class Predictor:
         self.calibrated = bool(th)
 
     def preprocess(self, text):
-        """prepare_data.py와 같은 정규화(NFC, 보이지 않는 문자 제거, 학습 때 줄바꿈을 지웠으면 똑같이)."""
-        t = ZERO_WIDTH.sub("", unicodedata.normalize("NFC", str(text))).strip()
+        """prepare_data.py와 같은 정규화(NFC, 보이지 않는 문자 제거, 학습 때 줄바꿈·연속 공백을 정리했으면 똑같이)."""
+        t = ZERO_WIDTH.sub("", unicodedata.normalize("NFC", str(text))).replace("\r\n", "\n").replace("\r", "\n").strip()
         if self.newlines == "space":
             t = re.sub(r"[ \t]*\n+[ \t]*", " ", t).strip()
+        if self.spaces == "collapse":
+            t = re.sub(SPACE_RUN, " ", t).strip()
         return t
 
     def score(self, texts):
@@ -110,7 +115,7 @@ class Predictor:
     def info(self):
         return {
             "model_dir": os.path.abspath(self.model_dir), "device": str(self.device), "max_len": self.max_len,
-            "newlines": self.newlines, "T_AI": self.t_ai, "T_HUMAN": self.t_human, "calibrated": self.calibrated,
+            "newlines": self.newlines, "spaces": self.spaces, "T_AI": self.t_ai, "T_HUMAN": self.t_human, "calibrated": self.calibrated,
             "target_fpr": (self.report or {}).get("target_fpr"), "ai_miss": (self.report or {}).get("ai_miss"),
             "base_model": self.train_config.get("args", {}).get("model"),
             "val_metrics": {k: v for k, v in (self.train_config.get("val_metrics") or {}).items() if isinstance(v, (int, float))},

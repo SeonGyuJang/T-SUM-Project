@@ -64,10 +64,10 @@ def data_preprocess_info(train_path):
     """prepare_data.py가 남긴 전처리 설정(줄바꿈 처리 등). 추론 때 똑같이 적용해야 합니다."""
     p = os.path.join(os.path.dirname(os.path.abspath(train_path)), "data_summary.json")
     if not os.path.exists(p):
-        return {"newlines": "keep"}
+        return {"newlines": "keep", "spaces": "keep"}
     with open(p, encoding="utf-8") as f:
         stats = json.load(f).get("cleaning_stats", {})
-    return {"newlines": stats.get("newlines_mode", "keep")}
+    return {"newlines": stats.get("newlines_mode", "keep"), "spaces": stats.get("spaces_mode", "keep")}
 
 
 def softmax_p1(logits):

@@ -36,9 +36,11 @@ def main():
     cfg_path = os.path.join(args.model, "train_config.json")
     cfg = json.load(open(cfg_path, encoding="utf-8")) if os.path.exists(cfg_path) else {}
     newlines = cfg.get("preprocess", {}).get("newlines", "keep")
-    if newlines == "keep":
-        print("⚠ 이 모델은 줄바꿈을 유지한 채 학습됐는데, service 전처리(clean_review)는 줄바꿈을 공백으로 바꿉니다.\n"
-              "  줄바꿈이 많은 리뷰에서 점수가 조금 달라질 수 있어요. (prepare_data.py --newlines space 로 학습하면 같아집니다)")
+    spaces = cfg.get("preprocess", {}).get("spaces", "keep")
+    if newlines != "space" or spaces != "collapse":
+        print("⚠ 이 모델은 줄바꿈·연속 공백을 그대로 둔 채 학습됐는데, service 전처리(clean_review)는 둘 다 공백 하나로 바꿉니다.\n"
+              "  학습 때 본 글과 서비스에서 보는 글이 달라 점수가 달라질 수 있어요. prepare_data.py 기본값(--newlines space --spaces collapse)으로\n"
+              "  데이터를 다시 만들고 학습하면 같아집니다.")
     dst = os.path.join(args.out, args.version)
     enc = os.path.join(dst, "encoder")
     if os.path.exists(enc):
@@ -54,7 +56,7 @@ def main():
         "encoder_id": cfg.get("args", {}).get("model"), "max_length": int(cfg.get("max_len") or cfg.get("args", {}).get("max_len", 256)),
         "calibration": {"a": 1.0, "b": 0.0},  # Detector: sigmoid(logit_ai - logit_human) = softmax P(AI)
         "thresholds": {"S": t, "M": t, "L": t, "ALL": t}, "min_chars": int(rep.get("min_chars", 20)),
-        "target_fpr": rep.get("target_fpr"), "ai_miss": rep.get("ai_miss"), "train_preprocess": {"newlines": newlines},
+        "target_fpr": rep.get("target_fpr"), "ai_miss": rep.get("ai_miss"), "train_preprocess": {"newlines": newlines, "spaces": spaces},
         "metrics_summary": {"val": {k: rep["val"].get(k) for k in ("auroc", "tpr", "fpr")}, "tests": test_metrics},
     }
     with open(os.path.join(dst, "manifest.json"), "w", encoding="utf-8") as f:

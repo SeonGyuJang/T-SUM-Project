@@ -30,6 +30,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from metrics import auroc, length_bucket  # noqa: E402
 
 ZERO_WIDTH = re.compile("[​‌‍⁠﻿]")
+# 서비스(realstar_model.preprocess._SPACES)와 같은 공백 문자: 스페이스·탭·\f·\v·줄바꿈 없는 공백(U+00A0)
+SPACE_RUN = re.compile("[ \t\f\v\u00a0]+")
 
 # AI 출력에만 붙는 메타 문구(모델이 덧붙인 안내문). 실제 조작자는 지우고 올리므로 학습 데이터에서도 지웁니다.
 AI_PREAMBLE = re.compile(
@@ -61,9 +63,9 @@ def read_any(path):
 
 
 def normalize(text):
-    """사람/AI 공통 정규화. 줄바꿈·연속 공백은 유의미한 신호라서 보존합니다."""
+    """사람/AI 공통 정규화(NFC, 보이지 않는 문자 제거). 공백·줄바꿈 정리는 --spaces·--newlines 로 따로 한다."""
     text = unicodedata.normalize("NFC", str(text))
-    text = ZERO_WIDTH.sub("", text)
+    text = ZERO_WIDTH.sub("", text).replace("\r\n", "\n").replace("\r", "\n")  # 윈도우 줄바꿈도 서비스처럼 \n으로
     return text.strip()
 
 
@@ -330,6 +332,21 @@ def length_shortcut_check(rows):
     return result.get("글자 수")
 
 
+def collapse_spaces(rows, mode, stats):
+    """연속 공백(탭·전각 공백 포함)을 하나로. 서비스(realstar_model.clean_review)가 판정 전에 똑같이 하므로
+    학습도 맞춰야 한다. 안 맞추면 '띄어쓰기 두 번 = 사람'(AI Hub 원문에 흔함) 같은 단서를 배우고, 서비스에선 그 단서가 사라진다."""
+    stats["spaces_mode"] = mode
+    if mode != "collapse":
+        return
+    changed = 0
+    for r in rows:
+        t = re.sub(SPACE_RUN, " ", r["text"]).strip()
+        if t != r["text"]:
+            r["text"] = t
+            changed += 1
+    stats["spaces_collapsed_rows"] = stats.get("spaces_collapsed_rows", 0) + changed
+
+
 def decide_newlines(mode, human, ai, stats):
     """사람·AI 리뷰의 줄바꿈 사용률이 크게 다르면(예: 네이버 말뭉치는 줄바꿈이 전부 지워져 있음)
     모델이 '줄바꿈 = AI' 지름길을 배웁니다. auto면 그런 경우에만 양쪽 줄바꿈을 공백으로 바꿉니다."""
@@ -347,6 +364,8 @@ def decide_newlines(mode, human, ai, stats):
         print(f"[줄바꿈] 사람 리뷰 {hr:.1%} · AI 리뷰 {ar:.1%}에 줄바꿈이 있음 → "
               + ("한쪽에만 있어 지름길이 되므로 양쪽 모두 공백으로 바꿉니다 (--newlines keep 으로 끌 수 있음)" if collapse
                  else "비슷하므로 그대로 둡니다"))
+    if mode == "space":
+        print(f"[줄바꿈] 사람 {hr:.1%} · AI {ar:.1%} → 서비스와 같게 양쪽 모두 공백으로 바꿉니다 (--newlines keep 으로 끌 수 있음)")
     if collapse:
         for r in human + ai:
             r["text"] = re.sub(r"[ \t]*\n+[ \t]*", " ", r["text"]).strip()
@@ -366,8 +385,11 @@ def main():
     ap.add_argument("--lgc-all-ai", action="store_true",
                     help="라벨 필드 없이 모든 LGC 레코드를 AI로 봄 (XDAC 공개 샘플). 사람 댓글이 없으면 1단계 대신 lgc_ai_test.jsonl만 만든다")
     ap.add_argument("--inspect-lgc", action="store_true", help="LGC 파일 구조(필드·라벨 값)만 출력하고 종료")
-    ap.add_argument("--newlines", choices=["auto", "keep", "space"], default="auto",
-                    help="리뷰 줄바꿈 처리. auto: 사람/AI 한쪽에만 줄바꿈이 있으면 양쪽 모두 공백으로(지름길 방지)")
+    ap.add_argument("--newlines", choices=["space", "auto", "keep"], default="space",
+                    help="리뷰 줄바꿈 처리. space(기본): 양쪽 모두 공백으로 — 서비스도 판정 전에 줄바꿈을 공백으로 바꾼다. "
+                         "auto: 한쪽에만 있을 때만 공백으로. keep: 그대로")
+    ap.add_argument("--spaces", choices=["collapse", "keep"], default="collapse",
+                    help="연속 공백을 하나로(기본, 서비스 전처리와 같게) / 그대로")
     ap.add_argument("--human-reviews", nargs="*", default=[], help="사람 리뷰 파일들 (공통 형식)")
     ap.add_argument("--ai-reviews", nargs="*", default=[], help="AI 생성 리뷰 파일들 (공통 형식 + generator)")
     ap.add_argument("--review-text-field", default="text")
@@ -406,7 +428,12 @@ def main():
 
     # ---------- Stage 1: LGC 댓글 ----------
     if args.lgc:
-        lgc = filter_and_dedupe(build_lgc_rows(args, stats), args, stats, "lgc")
+        lgc_rows = build_lgc_rows(args, stats)
+        collapse_spaces(lgc_rows, args.spaces, stats)
+        if args.newlines == "space":  # 서비스와 같게
+            for r in lgc_rows:
+                r["text"] = re.sub(r"\s*\n+\s*", " ", r["text"]).strip()
+        lgc = filter_and_dedupe(lgc_rows, args, stats, "lgc")
         if len({r["label"] for r in lgc}) < 2:
             # 사람 댓글이 없으면 분류 학습이 안 된다 → 학습에 섞지 않고 'AI 댓글을 얼마나 잡나'만 보는 테스트셋으로
             only = "AI" if lgc and lgc[0]["label"] == 1 else "사람"
@@ -427,6 +454,7 @@ def main():
         human = build_review_rows(args.human_reviews, 0, args, stats)
         ai = build_review_rows(args.ai_reviews, 1, args, stats)
         decide_newlines(args.newlines, human, ai, stats)
+        collapse_spaces(human + ai, args.spaces, stats)
         reviews = filter_and_dedupe(human + ai, args, stats, "review")
         holdout_gen = {g.strip().lower() for g in args.holdout_generators.split(",") if g.strip()}
         test_plat = {p.strip().lower() for p in args.test_only_platforms.split(",") if p.strip()}

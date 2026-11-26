@@ -117,3 +117,32 @@ test("키보드만으로 링크 입력부터 분석 시작", async ({ page }) =>
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/analyses\/mock-airfryer-\d+/);
 });
+
+test("리뷰 직접 확인: 붙여 넣기 → 판정 · 여러 개 · 빈 입력", async ({ page }) => {
+  const errors = await collectErrors(page);
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "주요 메뉴" }).getByRole("link", { name: "리뷰 직접 확인" }).click();
+  await expect(page).toHaveURL(/\/check$/);
+  await expect(page.getByRole("heading", { name: "이 리뷰, 사람이 썼을까요?" })).toBeVisible();
+
+  // 빈 입력
+  await page.getByRole("button", { name: "판별하기" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "판별할 리뷰를 입력해 주세요." })).toBeVisible();
+
+  // 한 개
+  await page.getByRole("button", { name: "예시 2 넣기" }).click();
+  await page.getByRole("button", { name: "판별하기" }).click();
+  await expect(page.getByRole("heading", { name: "판별 결과" })).toBeVisible();
+  await expect(page.getByText("예시 판정이에요")).toBeVisible();          // 목업은 실제 모델이 아님을 표시
+  await expect(page.getByRole("meter", { name: "AI가 썼을 확률" })).toHaveCount(1);
+  await expect(page.getByText("AI가 쓴 리뷰일 가능성이 높아요")).toBeVisible();
+
+  // 여러 개(빈 줄로 구분) + 짧은 리뷰
+  await page.getByLabel("여러 리뷰를 한 번에 (빈 줄로 구분)").check();
+  await page.getByLabel("판별할 리뷰").fill("배송 빨라요 근데 생각보다 작아서 좀 아쉽 ㅠㅠ 그래도 쓸만해요\n\n좋아요");
+  await page.getByRole("button", { name: "판별하기" }).click();
+  await expect(page.getByRole("meter", { name: "AI가 썼을 확률" })).toHaveCount(2);
+  await expect(page.getByText("글이 짧아(20자 미만) 판단할 정보가 부족해요.", { exact: false })).toBeVisible();
+  await expect(page.getByText(/AI 추정 \d+ · 사람 추정 \d+ · 판단 보류 \d+/)).toBeVisible();
+  expect(errors).toEqual([]);
+});

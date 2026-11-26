@@ -35,3 +35,14 @@ test("발표 모드: 상품명 → 선택 화면", async ({ page }) => {
   await page.getByRole("button", { name: /에어프라이어/ }).click();
   await expect(page).toHaveURL(/\/analyses\/demo-airfryer-\d+/);
 });
+
+test("발표 모드: 리뷰 직접 확인은 네트워크 없이 예시 판정", async ({ page, context }) => {
+  const external: string[] = [];
+  await context.route(/^https?:\/\/(?!localhost)/, (r) => { external.push(r.request().url()); return r.abort(); });
+  await page.goto("/check");
+  await page.getByLabel("판별할 리뷰").fill("배송 빨라요 근데 생각보다 사이즈가 작아서 좀 아쉽 ㅠㅠ 그래도 이 가격이면 쓸만해요");
+  await page.getByRole("button", { name: "판별하기" }).click();
+  await expect(page.getByText("발표 모드: 실제 AI 판별 모델이 아니라 예시 규칙으로 판정한 결과예요.")).toBeVisible();
+  await expect(page.getByRole("meter", { name: "AI가 썼을 확률" })).toBeVisible();
+  expect(external).toEqual([]);
+});

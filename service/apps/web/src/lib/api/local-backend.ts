@@ -6,7 +6,7 @@
  */
 import { DEMO_EXAMPLES, exampleByKey, exampleByProductId, type DemoExample } from "@/demo/examples";
 import { ApiError, DEMO_ONLY_MESSAGE } from "./errors";
-import type { AnalysisView, Candidate, CreateAnalysisResponse, ProductSummary, Progress, ResolveResult, ReviewItem, ReviewPage, StarKey } from "./schema";
+import type { AnalysisView, Candidate, CreateAnalysisResponse, DetectLabel, DetectResult, ProductSummary, Progress, ResolveResult, ReviewItem, ReviewPage, StarKey } from "./schema";
 import type { ReviewQuery } from "./types";
 
 export type LocalMode = "demo" | "mock";
@@ -223,6 +223,37 @@ export function localReviews(productId: string, q: ReviewQuery = {}): ReviewPage
   return { product_id: productId, star: q.star ?? null, total: all.length, offset, limit, items: all.slice(offset, offset + limit) };
 }
 
+/**
+ * 리뷰 직접 판별의 발표·목업용 예시 판정. 실제 모델이 아니라 글의 겉모습(맞춤법·문장부호·말투)만 보는 간단한 규칙이다.
+ * 화면에 "예시 판정"이라고 표시된다(model.note).
+ */
+export function localDetect(mode: LocalMode, texts: string[]): DetectResult {
+  const MIN = 20;
+  const T = { T_AI: 0.8, T_HUMAN: 0.35 };
+  const results = texts.map((raw, index) => {
+    const t = raw.replace(/\s+/g, " ").trim();
+    const n = [...t].length;
+    let score = 0.5;
+    if (/(습니다|입니다|합니다)[.!]?/.test(t)) score += 0.18;
+    if (/(전반적으로|만족스러운|추천드립니다|활용도|실용적)/.test(t)) score += 0.17;
+    if (/[ㅋㅎㅠㅜ]{2,}|[~!?]{2,}|\.\.+/.test(t)) score -= 0.3;
+    if (!/[.!?]$/.test(t)) score -= 0.08;
+    const p_ai = Math.round(Math.min(0.99, Math.max(0.01, score)) * 1000) / 1000;
+    const too_short = n < MIN;
+    const label: DetectLabel = too_short ? "uncertain" : p_ai > T.T_AI ? "ai" : p_ai <= T.T_HUMAN ? "human" : "uncertain";
+    return { index, label, p_ai, len_chars: n, too_short, thresholds: T, reason_tags: too_short ? ["짧은 리뷰(판단 보류)"] : [] };
+  });
+  return {
+    model: {
+      version: `${mode}-example`,
+      is_dummy: true,
+      min_chars: MIN,
+      note: mode === "demo" ? "발표 모드: 실제 AI 판별 모델이 아니라 예시 규칙으로 판정한 결과예요." : "목업 모드: 실제 AI 판별 모델이 아니라 예시 규칙으로 판정한 결과예요.",
+    },
+    results,
+  };
+}
+
 export function localApiFor(mode: LocalMode) {
   const delay = <T,>(v: () => T, ms = 350) =>
     new Promise<T>((resolve, reject) => setTimeout(() => {
@@ -235,5 +266,6 @@ export function localApiFor(mode: LocalMode) {
     getAnalysis: (id: string) => delay(() => localGet(id), 120),
     listProducts: () => delay(() => localProducts(mode), 150),
     getReviews: (pid: string, q?: ReviewQuery) => delay(() => localReviews(pid, q), 150),
+    detectReviews: (texts: string[]) => delay(() => localDetect(mode, texts), 400),
   };
 }

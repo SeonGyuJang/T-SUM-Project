@@ -46,7 +46,8 @@ cp .env.local.example .env                                   # 수집기 + AI �
 uvicorn --factory realstar_api.main:create_app --port 8000   # API
 # 새 터미널: cd apps/web && npm install && npm run dev        # 홈페이지 → http://localhost:3000
 ```
-API: `GET /api/products`(수집한 상품), `GET /api/products/{id}/reviews?star=5&offset=0&limit=10`(수집 리뷰).
+API: `GET /api/products`(수집한 상품), `GET /api/products/{id}/reviews?star=5&offset=0&limit=10`(수집 리뷰),
+`POST /api/detect` `{"reviews": [{"text": "…"}]}`(사용자가 입력한 리뷰 글을 바로 판별, 최대 20개·3,000자, 저장하지 않음 → 홈페이지 `/check`).
 `REVIEW_PROVIDER=fixture`면 쿠팡에 접속하지 않고 예시 JSON으로 동작한다. fixture 상품: `1000000001`(별점 재계산 고정 예제),
 `1000000002`(표본 부족), `1000000003`(차단 모의), `1000000004`(리뷰 없음), 단축 링크 `https://link.coupang.com/a/demo01`, 검색어 `텀블러`.
 

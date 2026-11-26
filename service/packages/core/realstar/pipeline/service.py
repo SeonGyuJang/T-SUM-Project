@@ -13,7 +13,15 @@ from realstar.config import Settings
 from realstar.db import repository as repo
 from realstar.db.models import Analysis, Product
 from realstar.db.session import session_scope
-from realstar.errors import BlockedError, InvalidInputError, RealstarError, ScraperBusyError
+from realstar.detection.backends import DetectorBackend, make_backend
+from realstar.detection.schemas import DetectInput
+from realstar.errors import (
+    BlockedError,
+    DetectorUnavailableError,
+    InvalidInputError,
+    RealstarError,
+    ScraperBusyError,
+)
 from realstar.pipeline.analysis import AnalysisPipeline
 from realstar.resolver import resolve_url
 from realstar.resolver.models import ResolveResult
@@ -156,11 +164,65 @@ def make_dispatcher(settings: Settings) -> Dispatcher:
     return InlineDispatcher(settings)
 
 
+def _bucket_thresholds(th: dict[str, Any] | None, bucket: str | None) -> dict[str, float] | None:
+    """manifest 임계값은 길이 구간별({S, M, L, ALL} → {T_AI, T_HUMAN}) 또는 하나({T_AI, T_HUMAN})다."""
+    if not th:
+        return None
+    t = th.get(bucket or "") or th.get("ALL") or th
+    try:
+        return {"T_AI": float(t["T_AI"]), "T_HUMAN": float(t["T_HUMAN"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 class RealstarService:
     def __init__(self, settings: Settings, dispatcher: Dispatcher) -> None:
         self.settings = settings
         self.dispatcher = dispatcher
         self.cache = repo.DbSearchCache(settings.database_url)
+        self._detector: DetectorBackend | None = None
+
+    # ── 리뷰 직접 판별 (/api/detect) ──────────────────────
+    def detector(self) -> DetectorBackend:
+        """분석 파이프라인과 같은 판별기. 같은 프로세스에 파이프라인이 있으면(inline) 이미 올린 모델을 같이 쓴다."""
+        pipe = getattr(self.dispatcher, "pipeline", None)
+        if pipe is not None:
+            return pipe.detector  # type: ignore[no-any-return]
+        if self._detector is None:
+            s = self.settings
+            self._detector = make_backend(
+                s.detector_mode, detector_url=s.detector_url, artifact_path=s.model_artifact_path,
+                min_chars=s.min_chars, timeout=s.detector_timeout_sec, artifact_url=s.model_artifact_url,
+            )
+        return self._detector
+
+    def check_reviews(self, reviews: list[dict[str, Any]]) -> dict[str, Any]:
+        """사용자가 입력한 리뷰 글을 그대로 판별한다. 글은 저장하지 않는다(DB·로그 모두)."""
+        det = self.detector()
+        info = det.info()
+        if not info.ready:
+            hint = {"none": "서버 설정(DETECTOR_MODE)에서 판별 모델이 꺼져 있어요."}.get(self.settings.detector_mode, "")
+            raise DetectorUnavailableError(
+                info.error or "detector not ready",
+                user_message=("AI 판별 모델이 아직 연결되지 않아 리뷰를 판별할 수 없어요. " + hint).strip(),
+            )
+        items = [
+            DetectInput(review_id=f"input-{i}", title=(r.get("title") or None), content=r["text"], star=r.get("star"))
+            for i, r in enumerate(reviews)
+        ]
+        outs = det.predict(items, batch_size=32)
+        min_chars = info.min_chars or self.settings.min_chars
+        results = []
+        for i, (r, o) in enumerate(zip(reviews, outs, strict=True)):
+            n = int((o.features or {}).get("len_chars") or len(r["text"].strip()))
+            results.append({
+                "index": i, "label": o.label, "p_ai": o.p_ai, "len_chars": n, "too_short": n < min_chars,
+                "thresholds": _bucket_thresholds(info.thresholds, o.len_bucket), "reason_tags": o.reason_tags,
+            })
+        return {
+            "model": {"version": info.model_version, "is_dummy": info.is_dummy, "min_chars": min_chars},
+            "results": results,
+        }
 
     # ── 상품 식별 (/api/resolve) ──────────────────────────
     def resolve_link(self, text: str) -> ResolveResult:

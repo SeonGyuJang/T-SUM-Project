@@ -1,4 +1,4 @@
-import type { AnalysisView, CreateAnalysisResponse, ProductSummary, ResolveResult, ReviewPage } from "./schema";
+import type { AnalysisView, CreateAnalysisResponse, DetectResult, ProductSummary, ResolveResult, ReviewPage } from "./schema";
 
 export type ResolveInput = { url: string } | { query: string } | { image: File };
 
@@ -12,4 +12,6 @@ export interface RealstarApi {
   listProducts(): Promise<ProductSummary[]>;
   /** 수집한 리뷰 원문 (별점 필터·페이지) */
   getReviews(productId: string, q?: ReviewQuery): Promise<ReviewPage>;
+  /** 사용자가 입력한 리뷰 글을 바로 판별 (서버에 저장하지 않음) */
+  detectReviews(texts: string[]): Promise<DetectResult>;
 }

@@ -84,6 +84,11 @@ class DetectorUnavailableError(RealstarError):
     code = "detector_unavailable"
     user_message = "AI 판별 모델을 사용할 수 없어요. 잠시 후 다시 시도해 주세요."
 
+    def __init__(self, detail: str = "", user_message: str | None = None, **extra: object) -> None:
+        super().__init__(detail, **extra)
+        if user_message:
+            self.user_message = user_message
+
 
 class VisionUnavailableError(RealstarError):
     code = "vision_unavailable"

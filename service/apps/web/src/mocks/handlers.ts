@@ -2,7 +2,7 @@
 import { http, HttpResponse, delay } from "msw";
 import { apiBaseUrl } from "@/lib/site";
 import { ApiError } from "@/lib/api/errors";
-import { localCreate, localGet, localProducts, localResolve, localReviews } from "@/lib/api/local-backend";
+import { localCreate, localDetect, localGet, localProducts, localResolve, localReviews } from "@/lib/api/local-backend";
 
 function fail(e: unknown) {
   if (e instanceof ApiError) return HttpResponse.json({ error: { code: e.code, message: e.message } }, { status: e.status || 500 });
@@ -33,6 +33,14 @@ export const handlers = [
     } catch (e) {
       return fail(e);
     }
+  }),
+  http.post(`${apiBaseUrl}/api/detect`, async ({ request }) => {
+    await delay(400);
+    const body = (await request.json()) as { reviews?: { text?: string }[] };
+    const texts = (body.reviews ?? []).map((r) => String(r.text ?? ""));
+    if (!texts.length || texts.some((t) => !t.trim()))
+      return HttpResponse.json({ error: { code: "invalid_input", message: "판별할 리뷰 내용을 입력해 주세요." } }, { status: 422 });
+    return HttpResponse.json(localDetect("mock", texts));
   }),
   http.get(`${apiBaseUrl}/api/products`, async () => {
     await delay(100);

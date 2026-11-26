@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { AnalyzeInput } from "@/components/features/analyze-input";
 import { CollectedProducts } from "@/components/features/collected-products";
 
@@ -23,6 +24,13 @@ export default function AnalyzePage() {
         <div className="mt-10">
           <AnalyzeInput autoFocus />
         </div>
+        <p className="mt-4 text-caption text-muted">
+          리뷰 글 하나만 확인하고 싶다면{" "}
+          <Link href="/check" className="font-medium text-primary underline-offset-4 hover:underline">
+            리뷰 직접 확인
+          </Link>
+          에서 붙여 넣어 보세요.
+        </p>
         <div className="mt-16">
           <CollectedProducts limit={20} />
         </div>

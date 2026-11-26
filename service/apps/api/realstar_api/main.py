@@ -6,6 +6,7 @@
   GET  /api/analyses/{id}/events SSE 진행 이벤트
   GET  /api/products             수집한 상품 목록 (수집기 output/ + DB)
   GET  /api/products/{id}/reviews  수집한 리뷰 (별점 필터·페이지)
+  POST /api/detect               {"reviews": [{"text"}]} → 사용자가 입력한 리뷰 글을 바로 판별 (저장하지 않음)
   GET  /api/health               detector, 수집기, 차단 쿨다운 상태
 """
 
@@ -45,6 +46,16 @@ STATUS_FOR_CODE = {
     "crawler_failed": 502,
     "page_budget_exceeded": 429,
 }
+
+
+class ReviewText(BaseModel):
+    text: str = Field(min_length=1, max_length=3000)
+    title: str | None = Field(default=None, max_length=200)
+    star: int | None = Field(default=None, ge=1, le=5)
+
+
+class DetectRequest(BaseModel):
+    reviews: list[ReviewText] = Field(min_length=1, max_length=20)
 
 
 class CreateAnalysis(BaseModel):
@@ -151,6 +162,13 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
         if view is None:
             return JSONResponse(status_code=404, content={"error": {"code": "not_found", "message": "분석 결과를 찾지 못했어요. 주소를 확인하거나 다시 분석해 주세요."}})  # type: ignore[return-value]
         return view
+
+    @app.post("/api/detect")
+    async def detect(body: DetectRequest) -> dict[str, Any]:
+        reviews = [r.model_dump() for r in body.reviews]
+        if any(not r["text"].strip() for r in reviews):
+            raise InvalidInputError("empty review text", "판별할 리뷰 내용을 입력해 주세요.")
+        return await asyncio.to_thread(svc.check_reviews, reviews)
 
     @app.get("/api/products")
     async def list_products() -> dict[str, Any]:

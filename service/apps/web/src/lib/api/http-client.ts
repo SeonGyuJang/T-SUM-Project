@@ -4,11 +4,13 @@ import {
   analysisViewSchema,
   apiErrorSchema,
   createAnalysisSchema,
+  detectResultSchema,
   productListSchema,
   resolveResultSchema,
   reviewPageSchema,
   type AnalysisView,
   type CreateAnalysisResponse,
+  type DetectResult,
   type ProductSummary,
   type ResolveResult,
   type ReviewPage,
@@ -73,5 +75,12 @@ export const httpApi: RealstarApi = {
     params.set("limit", String(q.limit ?? 10));
     if (q.modelVersion) params.set("model_version", q.modelVersion);
     return request(`/api/products/${encodeURIComponent(productId)}/reviews?${params}`, { method: "GET" }, (d) => reviewPageSchema.parse(d));
+  },
+  detectReviews(texts: string[]): Promise<DetectResult> {
+    return request(
+      "/api/detect",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reviews: texts.map((text) => ({ text })) }) },
+      (d) => detectResultSchema.parse(d),
+    );
   },
 };

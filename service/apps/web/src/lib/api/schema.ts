@@ -251,6 +251,31 @@ export const reviewPageSchema = z.object({
 });
 export type ReviewPage = z.infer<typeof reviewPageSchema>;
 
+/** POST /api/detect: 사용자가 입력한 리뷰 글을 바로 판별 */
+export const detectLabelSchema = z.enum(["ai", "human", "uncertain"]);
+export type DetectLabel = z.infer<typeof detectLabelSchema>;
+export const detectResultSchema = z.object({
+  model: z.object({
+    version: z.string().nullish(),
+    is_dummy: z.boolean().default(false),
+    min_chars: z.number().default(20),
+    /** 발표·목업 모드처럼 실제 모델이 아닌 예시 판정일 때 화면에 보여 줄 안내 */
+    note: z.string().nullish(),
+  }),
+  results: z.array(
+    z.object({
+      index: z.number(),
+      label: detectLabelSchema,
+      p_ai: z.number(),
+      len_chars: z.number(),
+      too_short: z.boolean().default(false),
+      thresholds: z.object({ T_AI: z.number(), T_HUMAN: z.number() }).nullish(),
+      reason_tags: z.array(z.string()).default([]),
+    }),
+  ),
+});
+export type DetectResult = z.infer<typeof detectResultSchema>;
+
 export const apiErrorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 
 export const TERMINAL: AnalysisStatus[] = ["done", "failed", "blocked"];

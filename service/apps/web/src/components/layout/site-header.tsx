@@ -3,6 +3,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { Logo } from "./logo";
 
 const NAV = [
+  { href: "/check", label: "리뷰 직접 확인" },
   { href: "/how-it-works", label: "작동 원리" },
   { href: "/faq", label: "자주 묻는 질문" },
 ];

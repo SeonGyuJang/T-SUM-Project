@@ -91,3 +91,53 @@ def test_health(settings: Settings) -> None:
     assert h["detector"]["backend"] == "dummy" and h["detector"]["is_dummy"]
     assert h["cooldown"]["active"] is False
     assert h["ocr"]["available"] is False
+
+
+# ── 리뷰 직접 판별 (/api/detect) ─────────────────────────────
+
+
+def test_detect_reviews_uses_pipeline_detector(settings: Settings) -> None:
+    det = DummyDetectorBackend(min_chars=20)
+    c, disp = client(settings, det)
+    r = c.post("/api/detect", json={"reviews": [
+        {"text": "배송 빠르고 포장도 꼼꼼해서 만족스러운 구매였어요 재구매 의사 있어요"},
+        {"text": "좋아요"},
+    ]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["model"]["version"] == DummyDetectorBackend.VERSION and body["model"]["is_dummy"] is True
+    first, short = body["results"]
+    assert first["index"] == 0 and first["label"] in ("ai", "human", "uncertain") and 0 <= first["p_ai"] <= 1
+    assert first["thresholds"] == {"T_AI": 0.8, "T_HUMAN": 0.3} and first["too_short"] is False
+    assert short["too_short"] is True and short["label"] == "uncertain"   # 20자 미만은 판단 보류
+    assert disp.pipeline.detector is det                                   # 분석과 같은 판별기(모델을 두 번 올리지 않음)
+
+
+def test_detect_validation(settings: Settings) -> None:
+    c, _ = client(settings)
+    assert c.post("/api/detect", json={"reviews": []}).status_code == 422
+    assert c.post("/api/detect", json={"reviews": [{"text": "   "}]}).status_code == 422
+    assert c.post("/api/detect", json={"reviews": [{"text": "가" * 3001}]}).status_code == 422
+    assert c.post("/api/detect", json={"reviews": [{"text": "리뷰"}] * 21}).status_code == 422
+
+
+def test_detect_without_model(settings: Settings) -> None:
+    from realstar.detection.backends import NoDetectorBackend
+
+    s = settings.model_copy(update={"detector_mode": "none"})
+    disp = InlineDispatcher(s, AnalysisPipeline(s, detector=NoDetectorBackend()))
+    c = TestClient(create_app(s, disp))
+    r = c.post("/api/detect", json={"reviews": [{"text": "배송 빠르고 좋아요 정말 만족합니다 추천해요"}]})
+    assert r.status_code == 503
+    err = r.json()["error"]
+    assert err["code"] == "detector_unavailable" and "DETECTOR_MODE" in err["message"]
+
+
+def test_detect_thresholds_by_length_bucket() -> None:
+    from realstar.pipeline.service import _bucket_thresholds
+
+    th = {"S": {"T_AI": 0.9, "T_HUMAN": 0.2}, "M": {"T_AI": 0.8, "T_HUMAN": 0.3}, "ALL": {"T_AI": 0.85, "T_HUMAN": 0.25}}
+    assert _bucket_thresholds(th, "S") == {"T_AI": 0.9, "T_HUMAN": 0.2}
+    assert _bucket_thresholds(th, "L") == {"T_AI": 0.85, "T_HUMAN": 0.25}      # 구간 없으면 ALL
+    assert _bucket_thresholds({"T_AI": 0.7, "T_HUMAN": 0.4}, "M") == {"T_AI": 0.7, "T_HUMAN": 0.4}
+    assert _bucket_thresholds(None, "M") is None

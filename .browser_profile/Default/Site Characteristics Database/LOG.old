@@ -1,3 +1,5 @@
-2026/11/17-14:38:13.627 172eab6 Reusing MANIFEST /Users/jangseongyu/Documents/GitHub/T-SUM-Project/.browser_profile/Default/Site Characteristics Database/MANIFEST-000001
-2026/11/17-14:38:13.627 172eab6 Recovering log #3
-2026/11/17-14:38:13.627 172eab6 Reusing old log /Users/jangseongyu/Documents/GitHub/T-SUM-Project/.browser_profile/Default/Site Characteristics Database/000003.log 
+2026/11/26-17:13:31.413 5a40 Log #3: 8 ops saved to Table #4 OK
+2026/11/26-17:13:31.416 5a40 Archiving C:\Users\dsng3\Documents\GitHub\T-SUM-Project\.browser_profile\Default\Site Characteristics Database/000003.log: OK
+2026/11/26-17:13:31.417 5a40 Table #4: 8 entries OK
+2026/11/26-17:13:31.420 5a40 Archiving C:\Users\dsng3\Documents\GitHub\T-SUM-Project\.browser_profile\Default\Site Characteristics Database/MANIFEST-000001: OK
+2026/11/26-17:13:31.439 5a40 **** Repaired leveldb C:\Users\dsng3\Documents\GitHub\T-SUM-Project\.browser_profile\Default\Site Characteristics Database; recovered 1 files; 273 bytes. Some data may have been lost. ****

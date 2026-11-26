@@ -1,3 +1,2 @@
-2026/11/17-14:45:45.945 172eb11 Reusing MANIFEST /Users/jangseongyu/Documents/GitHub/T-SUM-Project/.browser_profile/Default/Local Storage/leveldb/MANIFEST-000001
-2026/11/17-14:45:45.946 172eb11 Recovering log #3
-2026/11/17-14:45:45.947 172eb11 Reusing old log /Users/jangseongyu/Documents/GitHub/T-SUM-Project/.browser_profile/Default/Local Storage/leveldb/000003.log 
+2026/11/26-17:13:31.462 6dfc Creating DB C:\Users\dsng3\Documents\GitHub\T-SUM-Project\.browser_profile\Default\Local Storage\leveldb since it was missing.
+2026/11/26-17:13:31.488 6dfc Reusing MANIFEST C:\Users\dsng3\Documents\GitHub\T-SUM-Project\.browser_profile\Default\Local Storage\leveldb/MANIFEST-000001

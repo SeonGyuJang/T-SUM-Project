@@ -338,7 +338,10 @@ def decide_newlines(mode, human, ai, stats):
     hr, ar = rate(human), rate(ai)
     stats["newline_rate_human"] = round(hr, 4)
     stats["newline_rate_ai"] = round(ar, 4)
-    collapse = mode == "space" or (mode == "auto" and human and ai and abs(hr - ar) > 0.05 and min(hr, ar) < 0.02)
+    # 한쪽에 줄바꿈이 사실상 없으면(0.1% 미만) 다른 쪽이 조금만 있어도(0.5%↑) '줄바꿈 = 그쪽' 지름길이 된다.
+    # 예: 사람(네이버·AI Hub)은 0%, AI는 1.5% → 줄바꿈 있는 글은 무조건 AI로 배움. 서비스도 추론 때 줄바꿈을 공백으로 바꾼다.
+    one_sided = min(hr, ar) < 0.001 and max(hr, ar) >= 0.005
+    collapse = mode == "space" or (mode == "auto" and human and ai and (one_sided or (abs(hr - ar) > 0.05 and min(hr, ar) < 0.02)))
     if mode == "auto":
         print(f"[줄바꿈] 사람 리뷰 {hr:.1%} · AI 리뷰 {ar:.1%}에 줄바꿈이 있음 → "
               + ("한쪽에만 있어 지름길이 되므로 양쪽 모두 공백으로 바꿉니다 (--newlines keep 으로 끌 수 있음)" if collapse

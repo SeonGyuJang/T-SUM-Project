@@ -153,8 +153,7 @@ class Caller:
         if self.provider == "anthropic":
             return self._claude(model, prompt)
         if self.provider == "openai":
-            msgs = ([{"role": "system", "content": self.system}] if self.system else []) + [{"role": "user", "content": prompt}]
-            r = self.client.chat.completions.create(model=model, messages=msgs)
+            r = self._openai(model, prompt)
             ch = r.choices[0]
             if ch.finish_reason == "content_filter" or not (ch.message.content or "").strip():
                 return None, r.model, f"empty({ch.finish_reason})"
@@ -166,6 +165,20 @@ class Caller:
             fb = getattr(r, "prompt_feedback", None)
             return None, served, f"empty({getattr(fb, 'block_reason', None) or 'no text'})"
         return text, served, ""
+
+    def _openai(self, model, prompt):
+        """추론형 모델(o·gpt-5 계열 등)은 생각 단계를 최소로(reasoning_effort=low). 이 값을 안 받는 모델이면 빼고 다시(이후 계속 뺌)."""
+        msgs = ([{"role": "system", "content": self.system}] if self.system else []) + [{"role": "user", "content": prompt}]
+        use = self.thinking == "low" and model not in self.no_thinking_cfg
+        try:
+            if use:
+                return self.client.chat.completions.create(model=model, messages=msgs, reasoning_effort="low")
+            return self.client.chat.completions.create(model=model, messages=msgs)
+        except Exception as e:
+            if use and status_of(e) == 400 and "reasoning" in str(e).lower():
+                self.no_thinking_cfg.add(model)
+                return self.client.chat.completions.create(model=model, messages=msgs)
+            raise
 
     def gemini_thinking(self, model):
         """짧은 리뷰라 '생각' 단계를 최소로: 2.x는 thinking_budget(pro는 0이 안 돼 최소 128), 3.x 이후는 thinking_level=low.
@@ -237,6 +250,16 @@ def retryable(e):
     return any(k in name for k in ("connection", "timeout", "timedout", "servererror", "unavailable"))
 
 
+def error_text(e):
+    """오류 메시지 + SDK가 따로 들고 있는 본문(OpenAI e.body, Gemini e.details)까지 합친 글."""
+    parts = [str(e)]
+    for attr in ("body", "details", "code", "type"):
+        v = getattr(e, attr, None)
+        if v not in (None, ""):
+            parts.append(repr(v))
+    return " ".join(parts)
+
+
 def retry_delay(e, default=30.0):
     """서버가 알려 준 대기 시간: retry-after 헤더, 또는 본문의 'retry in 37.2s' / retryDelay: '37s'."""
     headers = getattr(getattr(e, "response", None), "headers", None)
@@ -246,13 +269,13 @@ def retry_delay(e, default=30.0):
             return max(1.0, float(v))
     except (TypeError, ValueError):
         pass
-    text = str(e)
+    text = error_text(e)
     m = re.search(r"retry in\s*([\d.]+)\s*s", text, re.I) or re.search(r"retryDelay['\"]?\s*[:=]\s*['\"]?([\d.]+)\s*s", text)
     return float(m.group(1)) if m else default
 
 
 def is_daily_quota(e):
-    return bool(re.search(r"PerDay|per\s*day|daily", str(e), re.I))
+    return bool(re.search(r"PerDay|per\s*day|daily", error_text(e), re.I))
 
 
 def attempt(caller, model, prompt):
@@ -262,6 +285,9 @@ def attempt(caller, model, prompt):
         return "ok", caller(model, prompt)
     except Exception as e:
         code = status_of(e)
+        if code == 429 and "insufficient_quota" in error_text(e):  # OpenAI: 결제 잔액·한도 없음 → 기다려도 안 풀림
+            raise Fatal(f"{describe(e)}\n→ OpenAI 계정에 결제 잔액(크레딧)이 없거나 월 사용 한도를 넘었어요. "
+                        "platform.openai.com 의 Billing에서 확인하세요.") from e
         if code == 429:
             return ("daily", None) if is_daily_quota(e) else ("rate", retry_delay(e))
         if code is not None and (code >= 500 or code in (408, 409)):
@@ -371,7 +397,7 @@ def main():
     ap.add_argument("--retry-failed", action="store_true", help="거절·오류로 넘어간 행(api_note 있음)도 다시 시도")
     ap.add_argument("--max-errors", type=int, default=20, help="연결 오류가 이만큼 연달아 나면 멈춤")
     ap.add_argument("--thinking", choices=["low", "default"], default="low",
-                    help="Gemini의 '생각' 단계: low(기본, 빠름) / default(모델 기본값, 느림). Claude는 늘 effort low")
+                    help="Gemini·ChatGPT 추론형 모델의 '생각' 단계: low(기본, 빠름) / default(모델 기본값, 느림). Claude는 늘 effort low")
     ap.add_argument("--rpm", type=float, default=None,
                     help="모델마다 분당 최대 요청 수 (예: 무료 Gemini 키면 10). 안 주면 429가 올 때 자동으로 줄임")
     ap.add_argument("--reassign-busy", action="store_true",

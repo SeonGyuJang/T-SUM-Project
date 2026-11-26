@@ -14,6 +14,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+import _winconsole  # noqa: F401,E402  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 from metrics import auroc, binary_report, threshold_at_fpr  # noqa: E402
 
 PY = sys.executable
@@ -21,7 +22,9 @@ rng = random.Random(0)
 
 
 def run(*args):
-    r = subprocess.run([PY, *args], cwd=ROOT, capture_output=True, text=True)
+    # 자식 프로세스 출력을 UTF-8로 받아 비교한다(윈도우 기본 cp949에서도 같은 결과)
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    r = subprocess.run([PY, *args], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", env=env)
     if r.returncode != 0:
         print(r.stdout, r.stderr)
         raise SystemExit(f"실패: {' '.join(args)}")
@@ -268,7 +271,8 @@ def test_convert_and_tasks():
         assert len(ai) == 8 and all(r["generator"] == "claude" and r["product_id"] for r in ai)
         # 채운 작업표는 덮어쓰지 않음 → --batch 로 새 묶음, 이전 기준 리뷰는 피함
         r = subprocess.run([PY, "make_ai_tasks.py", "make", "--human", merged,
-                            "--n", "5", "--generators", "claude", "--out", tasks], cwd=ROOT, capture_output=True, text=True)
+                            "--n", "5", "--generators", "claude", "--out", tasks], cwd=ROOT, capture_output=True, text=True,
+                           encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         assert r.returncode != 0 and "덮어쓰지 않습니다" in (r.stdout + r.stderr), r.stdout + r.stderr
         run("make_ai_tasks.py", "make", "--human", merged,
             "--n", "5", "--generators", "claude", "--batch", "b2", "--out", tasks)

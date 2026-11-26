@@ -13,6 +13,7 @@ XDAC 엔진의 출력 구조는 공개 문서에 나와 있지 않으므로 2단
 
 그다음 evaluate.py --scores-csv reports/xdac_scores.csv ... 로 같은 기준에서 비교합니다.
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import csv
 import json

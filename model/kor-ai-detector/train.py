@@ -11,6 +11,7 @@
     --replay data/processed/stage1_train.jsonl --replay-ratio 0.15 \
     --out models/stage2 --epochs 3 --lr 2e-5
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import json
 import math

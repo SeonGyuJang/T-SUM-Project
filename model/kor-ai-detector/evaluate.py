@@ -13,6 +13,7 @@
   python evaluate.py --scores-csv reports/xdac_scores.csv \
     --val data/processed/stage2_val.jsonl --test data/processed/stage2_test.jsonl --out reports/xdac
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import csv
 import json

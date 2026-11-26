@@ -14,6 +14,7 @@
     --holdout-generators gemini \
     --out data/processed
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import csv
 import json

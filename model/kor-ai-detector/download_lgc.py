@@ -8,6 +8,7 @@
   python download_lgc.py --inspect-only  # 이미 받은 파일 구조만 다시 보기
   (저장소 루트에서는: python model/kor-ai-detector/download_lgc.py)
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import os
 import subprocess

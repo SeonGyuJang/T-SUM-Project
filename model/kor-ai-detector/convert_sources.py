@@ -16,6 +16,7 @@ JSONL = 한 줄에 리뷰 하나인 JSON. 45만 건을 JSON 배열 하나로 두
 - 네이버 말뭉치에는 상품 정보가 없어 리뷰마다 product_id = "nv-<리뷰ID>"(리뷰 1건 = 그룹 1개)로 둡니다.
   날짜도 없어서 수집 시점(2020년 6~7월)의 상한인 2020-07-31을 넣습니다(--human-before 필터 통과용, date_estimated=true).
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import glob
 import hashlib

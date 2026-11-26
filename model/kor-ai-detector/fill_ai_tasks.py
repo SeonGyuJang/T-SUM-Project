@@ -21,6 +21,7 @@
   하루 한도를 다 쓰면 그 모델은 이번 실행에서 뺍니다. 서버 혼잡(503·504)이 이어지는 모델도 뺍니다(--reassign-busy 면 다른 모델이 대신).
 - 키·모델명 오류(401·403·404·400)는 바로 멈춥니다.
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import csv
 import os

@@ -11,6 +11,7 @@ service 쪽 설정(service/.env):
 service는 realstar_model.inference.Detector로 이 폴더를 연다. Detector는 점수 = logit(AI) − logit(사람)에
 보정(a=1, b=0)을 적용하므로 결과 P(AI)가 이 모델의 softmax 확률과 같고, 임계값도 report.json 값을 그대로 쓴다.
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import json
 import os

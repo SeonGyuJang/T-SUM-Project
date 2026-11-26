@@ -17,6 +17,7 @@
 - 유형: scratch 40% / style 30% / rewrite 30%. 네이버 말뭉치는 상품명이 없어 scratch·style도 기준 리뷰로 상품을 알려 준다.
 - 페르소나·말투·이모지·오타 허용 여부를 무작위 조합한다. 한 대화에 하나씩 요청한다(여러 개를 한 번에 받으면 비슷해진다).
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import csv
 import glob

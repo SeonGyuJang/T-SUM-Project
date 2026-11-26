@@ -7,6 +7,7 @@
 - 테스트셋(data/processed/*.jsonl)에서 무작위로 뽑아 정답과 판정을 나란히 볼 수 있습니다.
 - 임계값은 evaluate.py가 만든 report.json에서 읽습니다. 없으면 0.5 하나로 판정하고 화면에 경고를 띄웁니다.
 """
+import _winconsole  # noqa: F401  윈도우(cp949) 출력에서 기호 때문에 멈추지 않게
 import argparse
 import glob
 import json

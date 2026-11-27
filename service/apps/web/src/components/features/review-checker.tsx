@@ -8,6 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import { api, ApiError, type DetectLabel, type DetectResult } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { fmtPct } from "@/lib/format";
+
+/** 판정 기준 표시: 20% · 90% 처럼 딱 떨어지면 정수로, 아니면 소수점 둘째 자리까지 */
+function fmtThreshold(t: number): string {
+  const v = Math.round(t * 10000) / 100;
+  return Number.isInteger(v) ? `${v}%` : `${v.toFixed(2)}%`;
+}
 
 const MAX_CHARS = 3000;
 const MAX_REVIEWS = 20;
@@ -178,7 +185,8 @@ function Results({ data, texts }: { data: DetectResult; texts: string[] }) {
 
 function ResultCard({ r, text, numbered }: { r: DetectResult["results"][number]; text: string; numbered: boolean }) {
   const v = VERDICT[r.label];
-  const pct = Math.round(r.p_ai * 100);
+  const pct = r.p_ai * 100;
+  const pctText = fmtPct(r.p_ai, 2);
   const th = r.thresholds;
   return (
     <li className="rounded-xl border border-border bg-surface p-5 md:p-6">
@@ -193,15 +201,15 @@ function ResultCard({ r, text, numbered }: { r: DetectResult["results"][number];
       <div className="mt-5">
         <div className="flex items-baseline justify-between text-caption">
           <span className="font-medium">AI가 썼을 확률</span>
-          <span className="text-h3 tabular-nums">{pct}%</span>
+          <span className="text-h3 tabular-nums">{pctText}</span>
         </div>
         <div
           role="meter"
           aria-label="AI가 썼을 확률"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={pct}
-          aria-valuetext={`${pct}%`}
+          aria-valuenow={Math.round(pct * 100) / 100}
+          aria-valuetext={pctText}
           className="relative mt-2 h-3 rounded-full bg-subtle"
         >
           <div className={cn("h-3 rounded-full", v.bar)} style={{ width: `${Math.max(2, pct)}%` }} />
@@ -214,7 +222,7 @@ function ResultCard({ r, text, numbered }: { r: DetectResult["results"][number];
         </div>
         {th && (
           <p className="mt-2 text-caption text-muted">
-            {Math.round(th.T_HUMAN * 100)}% 이하면 사람, {Math.round(th.T_AI * 100)}%를 넘으면 AI로 판정해요. 그 사이는 판단 보류예요.
+            {fmtThreshold(th.T_HUMAN)} 미만이면 사람, {fmtThreshold(th.T_AI)} 이상이면 AI로 판정해요. 그 사이는 판단 보류예요.
           </p>
         )}
       </div>

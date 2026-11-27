@@ -24,6 +24,6 @@ def decide(p_ai: float, bucket: str, len_chars: int, thresholds: dict[str, Any],
     t = thresholds.get(bucket) or thresholds.get("ALL") or {"T_AI": 0.9, "T_HUMAN": 0.1}
     if p_ai >= t["T_AI"]:
         return "ai"
-    if p_ai <= t["T_HUMAN"]:
+    if p_ai < t["T_HUMAN"]:  # 서비스 기준과 같게: T_HUMAN 미만이 사람
         return "human"
     return "uncertain"

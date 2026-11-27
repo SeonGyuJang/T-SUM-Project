@@ -193,6 +193,7 @@ class RealstarService:
             self._detector = make_backend(
                 s.detector_mode, detector_url=s.detector_url, artifact_path=s.model_artifact_path,
                 min_chars=s.min_chars, timeout=s.detector_timeout_sec, artifact_url=s.model_artifact_url,
+                thresholds=s.detect_thresholds,
             )
         return self._detector
 

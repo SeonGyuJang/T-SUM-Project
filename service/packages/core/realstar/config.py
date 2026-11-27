@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     model_artifact_path: Path = REPO_ROOT / "model" / "artifacts" / "det-ko-review-v1.0"
     # 아티팩트 폴더가 없을 때 받아 올 tar.gz 주소(Heroku처럼 볼륨이 없는 배포용). 비우면 받지 않는다.
     model_artifact_url: str = ""
+    # 판정 기준 (홈페이지 표시·별점 재계산 공통). P(AI) ≥ detect_t_ai → AI, P(AI) < detect_t_human → 사람, 그 사이 → 판단 보류.
+    # detect_threshold_source=model 이면 이 값 대신 모델 아티팩트(manifest.json)에 저장된 기준을 쓴다.
+    detect_t_ai: float = 0.90
+    detect_t_human: float = 0.20
+    detect_threshold_source: Literal["service", "model"] = "service"
     detector_batch_size: int = 64
     detector_timeout_sec: int = 120
     min_chars: int = 20
@@ -80,6 +85,19 @@ class Settings(BaseSettings):
     resolve_auto_top1: float = 0.85
     resolve_auto_gap: float = 0.15
     resolve_max_candidates: int = 5
+
+    @field_validator("detect_t_human")
+    @classmethod
+    def _check_thresholds(cls, v: float, info: object) -> float:
+        t_ai = getattr(info, "data", {}).get("detect_t_ai", 0.9)
+        if not 0.0 < v < t_ai <= 1.0:
+            raise ValueError(f"판정 기준은 0 < DETECT_T_HUMAN({v}) < DETECT_T_AI({t_ai}) ≤ 1 이어야 해요.")
+        return v
+
+    @property
+    def detect_thresholds(self) -> tuple[float, float] | None:
+        """서비스가 정한 판정 기준 (T_AI, T_HUMAN). 모델 기준을 쓰도록 설정했으면 None."""
+        return None if self.detect_threshold_source == "model" else (self.detect_t_ai, self.detect_t_human)
 
     @field_validator("database_url")
     @classmethod

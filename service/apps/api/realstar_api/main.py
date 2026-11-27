@@ -233,7 +233,7 @@ def create_app(settings: Settings | None = None, dispatcher: Dispatcher | None =
             cd = Cooldown(get_state_store(settings), settings.block_cooldown_min).status()
             det = light_info(
                 settings.detector_mode, detector_url=settings.detector_url, artifact_path=settings.model_artifact_path,
-                min_chars=settings.min_chars,
+                min_chars=settings.min_chars, thresholds=settings.detect_thresholds,
             )
             from realstar.vision.ocr import get_ocr_engine
 

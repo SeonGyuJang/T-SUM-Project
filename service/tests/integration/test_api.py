@@ -141,3 +141,57 @@ def test_detect_thresholds_by_length_bucket() -> None:
     assert _bucket_thresholds(th, "L") == {"T_AI": 0.85, "T_HUMAN": 0.25}      # 구간 없으면 ALL
     assert _bucket_thresholds({"T_AI": 0.7, "T_HUMAN": 0.4}, "M") == {"T_AI": 0.7, "T_HUMAN": 0.4}
     assert _bucket_thresholds(None, "M") is None
+
+
+# ── 판정 기준(서비스 설정) ─────────────────────────────
+
+
+def test_service_thresholds_relabel_and_version() -> None:
+    from realstar.detection.backends import ServiceThresholdBackend
+    from realstar.detection.schemas import DetectInput, DetectOutput, ModelInfo
+
+    class Fixed:
+        def info(self) -> ModelInfo:
+            return ModelInfo(ready=True, backend="t", model_version="det-ko-review-v0.9", thresholds={"T_AI": 0.98, "T_HUMAN": 0.54}, min_chars=20)
+
+        def predict(self, items: list[DetectInput], batch_size: int = 64) -> list[DetectOutput]:
+            ps = {"a": 0.95, "b": 0.90, "c": 0.8999, "d": 0.20, "e": 0.1999, "f": 0.99}
+            return [DetectOutput(review_id=i.review_id, p_ai=ps[i.review_id], p_human=1 - ps[i.review_id], label="uncertain",
+                                 model_version="det-ko-review-v0.9", features={"len_chars": 5 if i.review_id == "f" else 50}) for i in items]
+
+    b = ServiceThresholdBackend(Fixed(), 0.90, 0.20, min_chars=20)
+    info = b.info()
+    assert info.thresholds == {"T_AI": 0.90, "T_HUMAN": 0.20} and info.model_version == "det-ko-review-v0.9+th90-20"
+    outs = b.predict([DetectInput(review_id=k, content="x" * 50) for k in "abcdef"])
+    got = {o.review_id: o.label for o in outs}
+    # 90% 이상 AI(경계 포함) · 20% 미만 사람(20%는 보류) · 그 사이 보류 · 20자 미만은 무조건 보류
+    assert got == {"a": "ai", "b": "ai", "c": "uncertain", "d": "uncertain", "e": "human", "f": "uncertain"}
+    assert all(o.model_version == "det-ko-review-v0.9+th90-20" for o in outs)  # 기준이 바뀌면 저장된 판정을 다시 쓰지 않음
+    assert {o.review_id: o.p_ai for o in outs}["a"] == 0.95                     # 확률은 그대로
+
+
+def test_make_backend_applies_thresholds_only_to_real_models(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from realstar.detection.backends import (
+        DummyDetectorBackend,
+        ServiceThresholdBackend,
+        light_info,
+        make_backend,
+    )
+
+    kw = {"detector_url": "http://x", "artifact_path": tmp_path, "min_chars": 20, "thresholds": (0.9, 0.2)}
+    assert isinstance(make_backend("inprocess", **kw), ServiceThresholdBackend)
+    assert isinstance(make_backend("dummy", **kw), DummyDetectorBackend)
+    assert not isinstance(make_backend("inprocess", **{**kw, "thresholds": None}), ServiceThresholdBackend)
+    (tmp_path / "manifest.json").write_text('{"model_version": "det-ko-review-v0.9", "thresholds": {"ALL": {"T_AI": 0.97, "T_HUMAN": 0.5}}}')
+    info = light_info("inprocess", detector_url="", artifact_path=tmp_path, min_chars=20, thresholds=(0.9, 0.2))
+    assert info.thresholds == {"T_AI": 0.9, "T_HUMAN": 0.2} and info.model_version == "det-ko-review-v0.9+th90-20"
+
+
+def test_threshold_settings_validation() -> None:
+    import pytest
+
+    s = Settings(detect_t_ai=0.85, detect_t_human=0.1)
+    assert s.detect_thresholds == (0.85, 0.1)
+    assert Settings(detect_threshold_source="model").detect_thresholds is None
+    with pytest.raises(ValueError):
+        Settings(detect_t_ai=0.3, detect_t_human=0.5)

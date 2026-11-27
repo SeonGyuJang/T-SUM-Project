@@ -44,7 +44,7 @@ export default function HowItWorksPage() {
             <li key={s.t}><strong className="text-text">{s.t}</strong> — {s.d}</li>
           ))}
         </ul>
-        <p>판정은 세 가지예요. <strong className="text-human">사람 리뷰</strong>, <strong className="text-ai">AI 작성 추정</strong>, 그리고 확신이 낮거나 너무 짧은 <strong className="text-text">판단 보류</strong>예요.</p>
+        <p>판정은 세 가지예요. <strong className="text-human">사람 리뷰</strong>, <strong className="text-ai">AI 작성 추정</strong>, 그리고 확신이 낮거나 너무 짧은 <strong className="text-text">판단 보류</strong>예요. AI가 썼을 확률이 90% 이상이면 AI 작성 추정, 20% 미만이면 사람 리뷰, 그 사이이거나 20자 미만이면 판단 보류로 둬요.</p>
 
         <h2>3. 사람 리뷰 기준 별점 계산</h2>
         <p>

@@ -141,7 +141,7 @@ def test_prepare_demo_with_model(fake_model_pkg: Path, settings: Settings, tmp_p
     data_dir = tmp_path / "apps" / "web" / "src" / "demo" / "data"
     ex = json.loads((data_dir / "p1000000001.json").read_text())
     assert ex["is_placeholder"] is False and ex["input_examples"]["query"] == "청소기"
-    assert ex["result"]["model"]["version"] == "det-ko-review-v1.0"
+    assert ex["result"]["model"]["version"] == "det-ko-review-v1.0+th90-20"  # 서비스 판정 기준(90%·20%) 표시
     assert [r["star"] for r in ex["replay"] if r["stage"] == "collect"] == [5, 4, 3, 2, 1]
     index = (data_dir / "index.ts").read_text()
     assert 'import ex0 from "./p1000000001.json";' in index and "DEMO_DATA" in index

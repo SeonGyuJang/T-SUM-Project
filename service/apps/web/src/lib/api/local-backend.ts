@@ -229,18 +229,18 @@ export function localReviews(productId: string, q: ReviewQuery = {}): ReviewPage
  */
 export function localDetect(mode: LocalMode, texts: string[]): DetectResult {
   const MIN = 20;
-  const T = { T_AI: 0.8, T_HUMAN: 0.35 };
+  const T = { T_AI: 0.9, T_HUMAN: 0.2 };
   const results = texts.map((raw, index) => {
     const t = raw.replace(/\s+/g, " ").trim();
     const n = [...t].length;
     let score = 0.5;
-    if (/(습니다|입니다|합니다)[.!]?/.test(t)) score += 0.18;
-    if (/(전반적으로|만족스러운|추천드립니다|활용도|실용적)/.test(t)) score += 0.17;
+    if (/(습니다|입니다|합니다)[.!]?/.test(t)) score += 0.2;
+    if (/(전반적으로|만족스러운|추천드립니다|활용도|실용적)/.test(t)) score += 0.22;
     if (/[ㅋㅎㅠㅜ]{2,}|[~!?]{2,}|\.\.+/.test(t)) score -= 0.3;
     if (!/[.!?]$/.test(t)) score -= 0.08;
-    const p_ai = Math.round(Math.min(0.99, Math.max(0.01, score)) * 1000) / 1000;
+    const p_ai = Math.round(Math.min(0.9937, Math.max(0.0113, score + (n % 7) * 0.0011)) * 10000) / 10000;
     const too_short = n < MIN;
-    const label: DetectLabel = too_short ? "uncertain" : p_ai > T.T_AI ? "ai" : p_ai <= T.T_HUMAN ? "human" : "uncertain";
+    const label: DetectLabel = too_short ? "uncertain" : p_ai >= T.T_AI ? "ai" : p_ai < T.T_HUMAN ? "human" : "uncertain";
     return { index, label, p_ai, len_chars: n, too_short, thresholds: T, reason_tags: too_short ? ["짧은 리뷰(판단 보류)"] : [] };
   });
   return {

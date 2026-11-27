@@ -217,15 +217,71 @@ class NoDetectorBackend:
         raise DetectorUnavailableError(self.MESSAGE)
 
 
-def light_info(mode: str, *, detector_url: str, artifact_path: Path, min_chars: int) -> ModelInfo:
+def threshold_tag(t_ai: float, t_human: float) -> str:
+    return f"th{t_ai * 100:g}-{t_human * 100:g}"
+
+
+def decide_label(p_ai: float, t_ai: float, t_human: float) -> str:
+    """P(AI) ≥ T_AI → ai, P(AI) < T_HUMAN → human, 그 사이 → uncertain."""
+    if p_ai >= t_ai:
+        return "ai"
+    if p_ai < t_human:
+        return "human"
+    return "uncertain"
+
+
+class ServiceThresholdBackend:
+    """모델이 낸 P(AI)는 그대로 두고, 판정(라벨)만 서비스 설정의 기준(DETECT_T_AI·DETECT_T_HUMAN)으로 다시 정한다.
+
+    모델 버전에 기준 표시(+th90-20)를 붙여, 기준을 바꾸면 예전 기준으로 저장된 판정을 다시 쓰지 않게 한다.
+    """
+
+    def __init__(self, inner: DetectorBackend, t_ai: float, t_human: float, min_chars: int) -> None:
+        self.inner = inner
+        self.t_ai = t_ai
+        self.t_human = t_human
+        self.min_chars = min_chars
+        self.tag = threshold_tag(t_ai, t_human)
+
+    def _version(self, v: str | None) -> str | None:
+        return f"{v}+{self.tag}" if v else v
+
+    def info(self) -> ModelInfo:
+        i = self.inner.info()
+        if not i.ready:
+            return i
+        return i.model_copy(update={"thresholds": {"T_AI": self.t_ai, "T_HUMAN": self.t_human},
+                                    "model_version": self._version(i.model_version)})
+
+    def predict(self, items: list[DetectInput], batch_size: int = 64) -> list[DetectOutput]:
+        outs = self.inner.predict(items, batch_size=batch_size)
+        by_id = {it.review_id: it for it in items}
+        fixed = []
+        for o in outs:
+            it = by_id.get(o.review_id)
+            n = (o.features or {}).get("len_chars")
+            if n is None and it is not None:
+                n = len(f"{it.title or ''} {it.content}".strip())
+            short = n is not None and int(n) < self.min_chars
+            label = "uncertain" if short else decide_label(o.p_ai, self.t_ai, self.t_human)
+            fixed.append(o.model_copy(update={"label": label, "model_version": self._version(o.model_version)}))
+        return fixed
+
+
+def light_info(mode: str, *, detector_url: str, artifact_path: Path, min_chars: int,
+               thresholds: tuple[float, float] | None = None) -> ModelInfo:
     """상태 확인용: 모델을 메모리에 올리지 않고 준비 여부만 본다(/api/health)."""
     if mode == "none":
         return NoDetectorBackend().info()
     if mode == "dummy":
         return DummyDetectorBackend(min_chars=min_chars).info()
     if mode == "http":
-        return HttpDetectorBackend(detector_url).info()
+        i = HttpDetectorBackend(detector_url).info()
+        return ServiceThresholdBackend(_Static(i), *thresholds, min_chars).info() if thresholds else i
     m = read_manifest(artifact_path)
+    if thresholds and m:  # 서비스 기준을 쓰면 상태 화면에도 그 기준·버전을 보여 준다
+        m = {**m, "thresholds": {"T_AI": thresholds[0], "T_HUMAN": thresholds[1]},
+             "model_version": f"{m.get('model_version')}+{threshold_tag(*thresholds)}"}
     try:
         import realstar_model.inference  # type: ignore[import-not-found]  # noqa: F401
 
@@ -238,13 +294,27 @@ def light_info(mode: str, *, detector_url: str, artifact_path: Path, min_chars: 
                      thresholds=m.get("thresholds"), min_chars=m.get("min_chars"), error=err)
 
 
+class _Static:
+    """info만 가진 백엔드(상태 확인용)."""
+
+    def __init__(self, info: ModelInfo) -> None:
+        self._info = info
+
+    def info(self) -> ModelInfo:
+        return self._info
+
+    def predict(self, items: list[DetectInput], batch_size: int = 64) -> list[DetectOutput]:  # pragma: no cover
+        raise DetectorUnavailableError("status only")
+
+
 def make_backend(
-    mode: str, *, detector_url: str, artifact_path: Path, min_chars: int, timeout: float = 120.0, artifact_url: str = ""
+    mode: str, *, detector_url: str, artifact_path: Path, min_chars: int, timeout: float = 120.0, artifact_url: str = "",
+    thresholds: tuple[float, float] | None = None,
 ) -> DetectorBackend:
-    if mode == "inprocess":
-        return RealstarModelBackend(artifact_path, artifact_url)
+    """thresholds=(T_AI, T_HUMAN)를 주면 실제 모델(inprocess·http)의 판정 기준을 서비스 설정으로 바꾼다(dummy는 그대로)."""
     if mode == "dummy":
         return DummyDetectorBackend(min_chars=min_chars)
     if mode == "none":
         return NoDetectorBackend()
-    return HttpDetectorBackend(detector_url, timeout=timeout)
+    real: DetectorBackend = RealstarModelBackend(artifact_path, artifact_url) if mode == "inprocess" else HttpDetectorBackend(detector_url, timeout=timeout)
+    return ServiceThresholdBackend(real, *thresholds, min_chars) if thresholds else real

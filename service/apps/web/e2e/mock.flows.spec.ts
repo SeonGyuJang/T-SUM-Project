@@ -136,6 +136,8 @@ test("리뷰 직접 확인: 붙여 넣기 → 판정 · 여러 개 · 빈 입력
   await expect(page.getByText("예시 판정이에요")).toBeVisible();          // 목업은 실제 모델이 아님을 표시
   await expect(page.getByRole("meter", { name: "AI가 썼을 확률" })).toHaveCount(1);
   await expect(page.getByText("AI가 쓴 리뷰일 가능성이 높아요")).toBeVisible();
+  await expect(page.getByText(/^\d{1,3}\.\d{2}%$/).first()).toBeVisible();                 // 소수점 둘째 자리
+  await expect(page.getByText("20% 미만이면 사람, 90% 이상이면 AI로 판정해요.", { exact: false })).toBeVisible();
 
   // 여러 개(빈 줄로 구분) + 짧은 리뷰
   await page.getByLabel("여러 리뷰를 한 번에 (빈 줄로 구분)").check();

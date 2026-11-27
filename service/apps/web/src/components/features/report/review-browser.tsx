@@ -29,7 +29,7 @@ function ReviewRow({ r }: { r: ReviewItem }) {
     <li className="rounded-xl border border-border bg-surface p-5">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-caption font-semibold num"><span aria-hidden className="text-star">★</span>{r.star}</span>
-        {label && <Badge tone={label.tone}>{label.text}{r.p_ai != null ? ` · AI ${fmtPct(r.p_ai, 0)}` : ""}</Badge>}
+        {label && <Badge tone={label.tone}>{label.text}{r.p_ai != null ? ` · AI ${fmtPct(r.p_ai, 2)}` : ""}</Badge>}
         {r.has_photo && <Badge tone="neutral"><Camera aria-hidden className="size-3.5" />사진 포함</Badge>}
         {r.is_sponsored && <Badge tone="warning">체험단·이벤트 고지</Badge>}
         <span className="ml-auto text-caption text-muted num">{fmtDate(r.created_at)}</span>
